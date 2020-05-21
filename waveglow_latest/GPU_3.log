@@ -1,0 +1,8 @@
+{'yoyo': True, 'yoyo_WN': False, 'n_mel_channels': 160, 'n_flows': 12, 'n_group': 8, 'n_early_every': 4, 'n_early_size': 2, 'memory_efficient': True, 'spect_scaling': False, 'upsample_mode': 'normal', 'WN_config': {'n_layers': 9, 'n_channels': 256, 'kernel_size': 3, 'speaker_embed_dim': 96, 'rezero': False}, 'win_length': 2400, 'hop_length': 600}
+Initializing Distributed
+ReduceLROnPlateau used as Learning Rate Scheduler.
+Files before checking:  232082
+Files after checking:  232082
+72,749,912 total parameters in model
+72,749,912 trainable parameters.
+Epoch: 0

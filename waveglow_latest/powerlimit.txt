@@ -1,0 +1,1 @@
+powerlimit=200; sudo nvidia-smi -i 0 -pl $powerlimit; sudo nvidia-smi -i 1 -pl $powerlimit; sudo nvidia-smi -i 2 -pl $powerlimit; sudo nvidia-smi -i 3 -pl $powerlimit
