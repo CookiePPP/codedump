@@ -1,0 +1,51 @@
+{
+    "train_config": {
+        "fp16_run": true,
+        "output_directory": "",
+        "epochs": 1000,
+        "learning_rate": 1e-4,
+        "sigma": 1.0,
+        "iters_per_checkpoint": 20000,
+        "batch_size": 5,
+        "seed": 1234,
+        "checkpoint_path": "outdir_NancyOnly/best_model",
+        "with_tensorboard": true,
+        "logdirname": "logs_12Flow_256Channel_8Layer_24Group_4EarlyEvery_3Kernel",
+        "datedlogdir": false
+    },
+    "data_config": {
+        "training_files": "map_0_GT_NancyOnly.txt",
+        "validation_files": "map_0_GT_Val.txt",
+        "validation_windows": [1200, 2400],
+        "segment_length": 19200,
+        "sampling_rate": 48000,
+        "filter_length": 2400,
+        "hop_length": 600,
+        "win_length": 2400,
+        "mel_fmin": 0.0,
+        "mel_fmax": 16000.0,
+        "load_mel_from_disk": true,
+        "preempthasis": 0.00
+    },
+    "dist_config": {
+        "dist_backend": "nccl",
+        "dist_url": "tcp://127.0.0.1:54321"
+    },
+    "waveglow_config": {
+        "yoyo": false,
+        "n_mel_channels": 160,
+        "n_flows": 12,
+        "n_group": 24,
+        "n_early_every": 4,
+        "n_early_size": 2,
+        "memory_efficient": false,
+        "spect_scaling": false,
+        "upsample_mode": "normal",
+        "WN_config": {
+            "n_layers": 8,
+            "n_channels": 256,
+            "kernel_size": 3,
+            "rezero": false
+        }
+    }
+}

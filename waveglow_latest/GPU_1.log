@@ -1,0 +1,26 @@
+{'yoyo': True, 'yoyo_WN': False, 'n_mel_channels': 160, 'n_flows': 5, 'n_group': 2, 'n_early_every': 6, 'n_early_size': 2, 'memory_efficient': True, 'spect_scaling': False, 'upsample_mode': 'normal', 'WN_config': {'n_layers': 12, 'n_channels': 256, 'kernel_size': 3, 'speaker_embed_dim': 96, 'rezero': False}, 'win_length': 2400, 'hop_length': 600}
+Initializing Distributed
+ReduceLROnPlateau used as Learning Rate Scheduler.
+Files before checking:  88419
+Files after checking:  88419
+40,573,022 total parameters in model
+40,573,022 trainable parameters.
+Epoch: 0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 32768.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 16384.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 8192.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 4096.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 2048.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 1024.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 512.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 256.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 128.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 64.0
+Gradient overflow.  Skipping step, loss scaler 0 reducing loss scale to 32.0
+
+
+
+LOSS EXPLOSION EXCEPTION: Loss reached 2.9979817867279053 during iteration 1296.
+
+
+

@@ -1,0 +1,12 @@
+# runs tensorboard from WaveGlow folder. Tensorboard lets you open a web browser to get a cool graph view of what your model is doing. Training Loss, Validation loss, average time per iteration and pictures of the last validation which make it easy to tell if the model has 'converged' or not.
+tensorboard --logdir=waveglow_current:checkpoints/logs,waveglow_old:checkpoints_old/logs,tacotron_current:../outdir/logdir,tacotron_old:../outdir_old/logdir
+
+# this is the training script for Multiple GPUs
+python3 distributed.py -c config.json
+
+# this is the training script for single GPUs
+python3 train.py -c config.json
+
+# lets you save the model at any time (useful for getting some damn sleep!)
+# both tacotron2 and WaveGlow are modified to use this.
+python save_model.py

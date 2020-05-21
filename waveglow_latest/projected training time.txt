@@ -1,0 +1,54 @@
+# ------------------------------------------------------------
+
+8x V100 16GB 22Khz
+545833 iters
+24 batch size
+16000 samples = 0.72562358 seconds
+17.414966 seconds per iteration
+9505663.1 seconds per run
+
+# ------------------------------------------------------------
+
+3x 2080 Ti 48Khz
+9505663.1 seconds per run
+24000 samples = 0.5 seconds
+12 batch size
+seconds per iteration = 6 seconds
+iters = 9505663.1 / 6 = 1584277 iters
+
+training time per iteration = 2.66s
+seconds to train WaveGlow 48Khz = 1584277 * 2.66 = 4214176.8
+hours to train WaveGlow 48Khz = 4214176.8 / 3600 = 1170.6047
+days to train WaveGlow 48Khz = 48.775196
+
+Power usage = 800W~
+Daily usage = 0.8 * 24 = 19.2KWh
+Cost in Pounds per day = £0.144 * 19.2 = £2.7648
+Cost of the model in Electricity = 48.775196 * 2.7648 = £134.85366
+
+# ------------------------------------------------------------
+
+8x 1080 Ti's
+9505663.1 seconds per run
+24000 samples = 0.5 seconds
+32 batch size
+seconds per iteration = 16 seconds
+iters = 9505663.1 / 16 = 594104 iters
+
+training time per iteration = 2.9s
+seconds to train WaveGlow 48Khz = 594104 * 2.9 = 1722901.6
+hours to train WaveGlow 48Khz = 1722901.6 / 3600 = 478.58378
+days to train WaveGlow 48Khz = 19.940991
+
+Power usage = 8 * 270W~ = 2160W~
+Daily usage = 2.16 * 24 = 51.84KWh
+Cost in Pounds per day = £0.144 * 51.84 = £7.46496
+Cost of the model in Electricity = 19.940991 * 7.46496 = £148.8587
+
+# ------------------------------------------------------------
+
+((9505663.1 / ( (43200/48000)×18 ) ) × 1.29 )/(3600×24) == 8.760792 days
+
+(((9505663.1 / ( (43200/48000)×18 ) )−42000) × 1.29 )/(3600×24) = 8.1337087 days remaining
+
+(((9505663.1 / ( (48000/48000)×18 ) )−1200) × 5.08 )/(3600×24) = 30.979321 days remaining
