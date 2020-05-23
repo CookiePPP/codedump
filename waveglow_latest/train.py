@@ -38,7 +38,6 @@ import numpy as np
 import soundfile as sf
 
 save_file_check_path = "save"
-num_workers_ = 2
 
 #=====START: ADDED FOR DISTRIBUTED======
 from distributed import init_distributed, apply_gradient_allreduce, reduce_tensor
@@ -141,7 +140,7 @@ def save_weights(model, optimizer, learning_rate, iteration, filepath):
                 'iteration': iteration}, filepath)
     print("Weights Saved")
 
-def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, speaker_lookup, sigma, output_directory, sampling_rate, save_audio=True, max_length_s= 5 ):
+def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, speaker_lookup, sigma, output_directory, data_config, save_audio=True, max_length_s= 5 ):
     from mel2samp import load_wav_to_torch
     from scipy import signal
     val_sigma = sigma * 0.9
@@ -160,13 +159,13 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
         for i, (audiopath, melpath, *remaining) in enumerate(audiopaths_and_melpaths):
             if i > 60: break # debug
             audio = load_wav_to_torch(audiopath)[0]/32768.0 # load audio from wav file to tensor
-            if audio.shape[0] > (sampling_rate*max_length_s): continue # ignore audio over max_length_seconds
+            if audio.shape[0] > (data_config['sampling_rate']*max_length_s): continue # ignore audio over max_length_seconds
             
             if loader_STFT:
                 mel = loader_STFT.mel_spectrogram(audio.unsqueeze(0)).cuda()
-            #else:
-            #    mel = np.load(melpath) # load mel from file into numpy arr
-            #    mel = torch.from_numpy(mel).unsqueeze(0).cuda() # from numpy arr to tensor on GPU
+            else:
+                mel = np.load(melpath) # load mel from file into numpy arr
+                mel = torch.from_numpy(mel).unsqueeze(0).cuda() # from numpy arr to tensor on GPU
             
 #            if data_config['preempthasis']: # preempthasis
 #                audio = audio.numpy()
@@ -213,12 +212,12 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             if save_audio:
                 audio_path = os.path.join(output_directory, "samples", str(iteration)+"-"+timestr, os.path.basename(audiopath)) # Write audio to checkpoint_directory/iteration/audiofilename.wav
                 os.makedirs(os.path.join(output_directory, "samples", str(iteration)+"-"+timestr), exist_ok=True)
-                sf.write(audio_path, audio_waveglow.squeeze().cpu().numpy(), sampling_rate, "PCM_16") # save waveglow sample
+                sf.write(audio_path, audio_waveglow.squeeze().cpu().numpy(), data_config['sampling_rate'], "PCM_16") # save waveglow sample
                 
                 audio_path = os.path.join(output_directory, "samples", "Ground Truth", os.path.basename(audiopath)) # Write audio to checkpoint_directory/iteration/audiofilename.wav
                 if not os.path.exists(audio_path):
                     os.makedirs(os.path.join(output_directory, "samples", "Ground Truth"), exist_ok=True)
-                    sf.write(audio_path, audio.squeeze().cpu().numpy(), sampling_rate, "PCM_16") # save ground truth
+                    sf.write(audio_path, audio.squeeze().cpu().numpy(), data_config['sampling_rate'], "PCM_16") # save ground truth
     
     for convinv in model.convinv:
         if hasattr(convinv, 'W_inverse'):
@@ -346,7 +345,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                                       optimizer, scheduler, fp16_run, warm_start=warm_start)
         iteration += 1  # next iteration is iteration + 1
     
-    trainset = Mel2Samp(**data_config)
+    trainset = Mel2Samp(**data_config, check_files=True)
     speaker_lookup = trainset.speaker_ids
     # =====START: ADDED FOR DISTRIBUTED======
     if num_gpus > 1:
@@ -356,7 +355,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
         train_sampler = None
         shuffle = True
     # =====END:   ADDED FOR DISTRIBUTED======
-    train_loader = DataLoader(trainset, num_workers=num_workers_, shuffle=shuffle,
+    train_loader = DataLoader(trainset, num_workers=2, shuffle=shuffle,
                               sampler=train_sampler,
                               batch_size=batch_size,
                               pin_memory=False,
@@ -549,7 +548,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                     
                     if (iteration % validation_interval == 0):
                         if rank == 0:
-                            MSE, MAE = validate(model, loader_STFT, STFT, logger, iteration, data_config['validation_files'], speaker_lookup, sigma, output_directory, data_config['sampling_rate'])
+                            MSE, MAE = validate(model, loader_STFT, STFT, logger, iteration, data_config['validation_files'], speaker_lookup, sigma, output_directory, data_config)
                             if scheduler:
                                 MSE = torch.tensor(MSE, device='cuda')
                                 broadcast(MSE, 0)

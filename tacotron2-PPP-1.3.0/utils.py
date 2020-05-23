@@ -29,7 +29,11 @@ def dropout_frame(mels, global_mean, mel_lengths, drop_frame_rate):
 
 def load_wav_to_torch(full_path):
     sampling_rate, data = read(full_path)
-    max_value = np.iinfo(data.dtype).max
+    if np.issubdtype(data.dtype, np.integer):
+        max_value = np.iinfo(data.dtype).max
+    else: # if audio data is type fp32
+        max_value = np.amax(data)
+        max_value = 2**31 if max_value > (2**15) else (2**15 if max_value > 1.01 else 1.0) # data should be either 16-bit INT, 32-bit INT or [-1 to 1] float32
     return torch.FloatTensor(data.astype(np.float32)), sampling_rate, max_value
 
 

@@ -68,10 +68,9 @@ class Mel2Samp(torch.utils.data.Dataset):
     spectrogram, audio pair.
     """
     def __init__(self, training_files, validation_files, validation_windows, segment_length, filter_length,
-                 hop_length, win_length, sampling_rate, mel_fmin, mel_fmax, load_mel_from_disk, preempthasis):
+                 hop_length, win_length, sampling_rate, mel_fmin, mel_fmax, load_mel_from_disk, preempthasis, check_files=False):
         self.audio_files = load_filepaths_and_text(training_files)
         
-        check_files = 0
         if check_files:
             print("Files before checking: ", len(self.audio_files))
             i = 0
@@ -80,13 +79,18 @@ class Mel2Samp(torch.utils.data.Dataset):
                 i = i_ + i_offset
                 if i == len(self.audio_files): break
                 file = self.audio_files[i]
-                if not os.path.exists(file[0]):
-                    print(file[0],"does not exist")
+                
+                if not os.path.exists(file[0]): # check if audio file exists
+                    print(f"'{file[0]}' does not exist")
+                    self.audio_files.remove(file); i_offset-=1; continue
+                
+                if load_mel_from_disk and not os.path.exists(file[1]): # check if mel exists
+                    print(f"'{file[1]}' does not exist")
                     self.audio_files.remove(file); i_offset-=1; continue
                 
                 audio_data, sample_r, *_ = load_wav_to_torch(file[0])
-                if audio_data.size(0) <= segment_length:
-                    print(file[0],"is too short")
+                if audio_data.size(0) <= segment_length: # check if audio file is shorter than segment_length
+                    print(f"'{file[0]}' is too short")
                     self.audio_files.remove(file); i_offset-=1; continue
             print("Files after checking: ", len(self.audio_files))
         
@@ -119,9 +123,11 @@ class Mel2Samp(torch.utils.data.Dataset):
         return d
     
     def get_speaker_id(self, speaker_id):
+        """Convert external speaker_id to internel [0 to max_speakers] range speaker_id"""
         return torch.IntTensor([self.speaker_ids[int(speaker_id)]])
     
     def get_mel(self, audio):
+        """Take audio, normalize [-1 to 1] and convert to spectrogram"""
         audio_norm = audio / self.MAX_WAV_VALUE
         audio_norm = audio_norm.unsqueeze(0)
         audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
@@ -129,6 +135,7 @@ class Mel2Samp(torch.utils.data.Dataset):
         return melspec
     
     def get_segment(self, audio, mel, segment_length, hop_length, n_mel_channels=160):
+        """get audio and mel segment from an already generated spectrogram and audio."""
         mel_segment_length = int(segment_length/hop_length) # 8400/600 = 14
         if audio.size(0) >= segment_length:
             max_mel_start = int((audio.size(0)-segment_length)/hop_length) # audio.size(0)%self.hop_length is the remainder
@@ -156,27 +163,25 @@ class Mel2Samp(torch.utils.data.Dataset):
                 sampling_rate, self.sampling_rate))
         
         if (self.load_mel_from_disk):
-            # Take segment
+            # load mel from disk
             mel = np.load(filename[1])
-            assert self.segment_length % self.hop_length == 0, 'self.segment_length must be n times of self.hop_length'
-#            if (mel.shape[1] > ceil(len(audio)/self.hop_length)):
-#                print('mel is longer than audio file')
-#                print('path', filename[1], '\nmel_length', mel.shape[1], '\naudio length', len(audio), '\naudio_hops', ceil(len(audio)/self.hop_length))
-#                raise Exception
-#            if (mel.shape[1] < ceil(len(audio)/self.hop_length)):
-#                print('mel is shorter than audio file')
-#                print('path', filename[1], '\nmel_length', mel.shape[1], '\naudio length', len(audio), '\naudio_hops', ceil(len(audio)/self.hop_length))
-#                raise Exception
-            loop = 0
-            while True:
-                audio_, mel_, start_step, stop_step = self.get_segment(audio, mel, self.segment_length, self.hop_length) # get random segment of audio file
-                std = torch.std(audio_)
-                if std > (0.00762939453125*self.MAX_WAV_VALUE): break # if sample is not silent, use sample for WaveGlow.
-                loop+=1
-                if loop > 20:
-                    print("No Loud Samples Found, filename:",filename[0]); break
-            #print(f"STD: {std} Loops: {loop}")
-            audio, mel = audio_, mel_
+            
+            # offset the audio if the GTA spectrogram uses an offset
+            if ".mel.npy" in filename[1] or (".mel" in filename[1] and ".npy" in filename[1] and filename[1].split(".mel")[1].split(".npy")[0]):
+                offset = int(filename[1].split(".mel")[1].split(".npy")[0])
+                audio = audio[offset:]
+                print(f"DEBUG: audio offset success.\nPath = '{filename[1]}'\nOffset = {offset}")
+            
+            assert self.segment_length % self.hop_length == 0, 'self.segment_length must be n times self.hop_length'
+            
+            # Take segment
+            for i in range(20):
+                audio_segment, mel_segment, start_step, stop_step = self.get_segment(audio, mel, self.segment_length, self.hop_length) # get random segment of audio file
+                if torch.std(audio_segment) > (0.006103515625*self.MAX_WAV_VALUE): # if sample is not silent, use sample for WaveGlow.
+                    break
+            else:
+                print("No loud segments found, filename:", filename[0])
+            audio, mel = audio_segment, mel_segment
             
             mel = torch.from_numpy(mel).float()
         else:
@@ -184,23 +189,23 @@ class Mel2Samp(torch.utils.data.Dataset):
             if audio.size(0) >= self.segment_length:
                 max_audio_start = audio.size(0) - self.segment_length
                 std = 9e9
-                loop = 0
-                while True:
+                for i in range(20):
                     audio_start = random.randint(0, max_audio_start)
                     audio_segment = audio[audio_start:audio_start + self.segment_length]
-                    std = torch.std(audio_segment)
-                    if std > (0.006103515625*self.MAX_WAV_VALUE): break # if sample is not silent, use sample for WaveGlow.
-                    loop+=1
-                    if loop > 20:
-                        print("No Loud Sample Found, filename:",filename[0]); break
+                    if torch.std(audio_segment) > (0.006103515625*self.MAX_WAV_VALUE): break # if sample is not silent, use sample for WaveGlow.
+                else:
+                    print("No Loud Sample Found, filename:",filename[0])
                 audio = audio_segment
             else:
                 audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(0)), 'constant').data
             assert audio.shape[0], f"Audio has 0 length.\nFile: {filename[0]}\nIndex: {index}"
-            mel = self.get_mel(audio) # generate mel from audio segment
+            # generate mel from audio segment
+            mel = self.get_mel(audio)
         
+        # normalize audio [-1 to 1]
         audio = audio / self.MAX_WAV_VALUE
         
+        # apply preempthasis to audio signal (if used)
         if hasattr(self, 'preempthasise'):
             audio = self.preempthasise(audio.unsqueeze(0).unsqueeze(0)).squeeze()
         

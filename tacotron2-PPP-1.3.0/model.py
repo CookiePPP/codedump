@@ -426,6 +426,7 @@ class Decoder(nn.Module):
         self.prenet_layers = hparams.prenet_layers
         self.prenet_batchnorm = hparams.prenet_batchnorm
         self.p_prenet_dropout = hparams.p_prenet_dropout
+        self.prenet_speaker_embed_dim = hparams.prenet_speaker_embed_dim
         self.max_decoder_steps = hparams.max_decoder_steps
         self.gate_threshold = hparams.gate_threshold
         self.AttRNN_extra_decoder_input = hparams.AttRNN_extra_decoder_input
@@ -742,6 +743,11 @@ class Decoder(nn.Module):
         # (B, mel_channels, T_out) -> (T_out, B, mel_channels)
         
         decoder_inputs = torch.cat((decoder_input, decoder_inputs), dim=0) # concat T_out
+        
+        if self.prenet_speaker_embed_dim:
+            embedded_speakers = self.speaker_embedding(speaker_ids)[:, None]
+            embedded_speakers = embedded_speakers.repeat(1, encoder_outputs.size(1), 1)
+            decoder_inputs = torch.cat((decoder_inputs, embedded_speakers), dim=2)
         
         decoder_inputs = self.prenet(decoder_inputs) # some linear layers
         

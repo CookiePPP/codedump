@@ -37,7 +37,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         2) normalizes text and converts them to sequences of one-hot vectors
         3) computes mel-spectrograms from audio files.
     """
-    def __init__(self, audiopaths_and_text, hparams, check_files=True, TBPTT=True, speaker_ids=None, verbose=False):
+    def __init__(self, audiopaths_and_text, hparams, check_files=True, TBPTT=True, shuffle=False, speaker_ids=None, audio_offset=0, verbose=False):
         self.audiopaths_and_text = load_filepaths_and_text(audiopaths_and_text)
         self.text_cleaners = hparams.text_cleaners
         self.max_wav_value = hparams.max_wav_value
@@ -46,6 +46,8 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.truncated_length = hparams.truncated_length
         self.batch_size = hparams.batch_size
         self.speaker_ids = speaker_ids
+        self.audio_offset = audio_offset
+        self.shuffle = shuffle
         if speaker_ids is None:
             self.speaker_ids = self.create_speaker_lookup_table(self.audiopaths_and_text)
         
@@ -54,7 +56,8 @@ class TextMelLoader(torch.utils.data.Dataset):
         # ---------- CHECK FILES --------------
         self.start_token = hparams.start_token
         self.stop_token = hparams.stop_token
-        self.checkdataset()
+        if check_files:
+            self.checkdataset(verbose)
         # -------------- CHECK FILES --------------
         
         self.stft = layers.TacotronSTFT(
@@ -83,14 +86,20 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.truncated_length = hparams.truncated_length # frames
         
         # -------------- PREDICT LENGTH (TBPTT) --------------
-        self.audio_lengths = torch.tensor([self.get_mel(x[0]).shape[1] for x in self.audiopaths_and_text]) # get the length of every file (the long way)
+        if TBPTT:
+            self.audio_lengths = torch.tensor([self.get_mel(x[0]).shape[1] for x in self.audiopaths_and_text]) # get the length of every file (the long way)
+        else:
+            self.audio_lengths = torch.tensor([self.truncated_length-1 for x in self.audiopaths_and_text]) # use dummy lengths
         self.update_dataloader_indexes()
         # -------------- PREDICT LENGTH (TBPTT) --------------
     
     def shuffle_dataset(self):
+        print("Shuffling Dataset")
+        
         # shuffle filelist and audio lengths (they're shuffled together so they still line up) (note, shuffle uses a new Random() instance with same seed so should perform the same shuffle operation in a distributed environment)
-        zipped = list(zip(self.audiopaths_and_text, self.audio_lengths))
+        zipped = list(zip(self.audiopaths_and_text, self.audio_lengths.numpy()))
         self.audiopaths_and_text, self.audio_lengths = zip(*random.Random(self.random_seed).sample(zipped, len(zipped)))
+        self.audio_lengths = torch.tensor(self.audio_lengths)
         
         # regen the order to load truncated files/which states to preserve
         self.update_dataloader_indexes()
@@ -104,7 +113,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         processed = 0
         currently_empty_lengths = 0
         
-        while self.audio_lengths.shape[0]+1>processed+self.total_batch_size+currently_empty_lengths:
+        while self.audio_lengths.shape[0]+1 > processed+self.total_batch_size+currently_empty_lengths:
             # replace empty lengths
             currently_empty_lengths = (batch_remaining_lengths<1).sum().item()
             # update batch_indexes
@@ -128,7 +137,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.len = len(self.dataloader_indexes)
     
     def checkdataset(self, verbose=False):
-        print("Checking dataset files...", end="")
+        print("Checking dataset files... ", end="")
         audiopaths_length = len(self.audiopaths_and_text)
         filtered_chars=["☺","␤"]
         banned_strings = ["[","]"]
@@ -210,7 +219,9 @@ class TextMelLoader(torch.utils.data.Dataset):
     def get_mel(self, filename):
         if not self.load_mel_from_disk:
             audio, sampling_rate, max_value = load_wav_to_torch(filename)
-            self.max_wav_value = max_value # update normalization based on audio file bit depth
+            if self.audio_offset: # used for extreme GTA'ing
+                audio = audio[self.audio_offset:]
+            self.max_wav_value = max(max_value, audio.max().item(), -audio.min().item()) # I'm not sure how, but sometimes the magnitude of audio exceeds the max of the datatype used before casting.
             if sampling_rate != self.stft.sampling_rate:
                 raise ValueError("{} {} SR doesn't match target {} SR".format(
                     sampling_rate, self.stft.sampling_rate))
@@ -220,7 +231,7 @@ class TextMelLoader(torch.utils.data.Dataset):
             melspec = self.stft.mel_spectrogram(audio_norm)
             melspec = torch.squeeze(melspec, 0)
         else:
-            melspec = torch.from_numpy(np.load(filename, allow_pickle=True))
+            melspec = torch.from_numpy(np.load(filename, allow_pickle=True)).float()
             assert melspec.size(0) == self.stft.n_mel_channels, (
                 'Mel dimension mismatch: given {}, expected {}'.format(
                     melspec.size(0), self.stft.n_mel_channels))
@@ -262,8 +273,8 @@ class TextMelLoader(torch.utils.data.Dataset):
         return text_norm
     
     def __getitem__(self, index):
-        #if index == self.rank*self.batch_size: # [0,1,2,3],[4,5,6,7],[8,9,10,11]
-        #   shuffle_dataset
+        if self.shuffle and index == self.rank*self.batch_size: # [0,1,2,3],[4,5,6,7],[8,9,10,11]
+           self.shuffle_dataset()
         return self.get_mel_text_pair(index)
     
     def __len__(self):

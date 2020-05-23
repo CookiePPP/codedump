@@ -21,12 +21,13 @@ from train import init_distributed
 
 import time
 
+
 class StreamingMovingAverage:
     def __init__(self, window_size):
         self.window_size = window_size
         self.values = []
         self.sum = 0
-
+    
     def process(self, value):
         self.values.append(value)
         self.sum += value
@@ -63,24 +64,9 @@ def init_distributed(hparams, n_gpus, rank, group_name):
     print("Done initializing distributed")
 
 
-def prepare_dataloaders(hparams):
+def prepare_dataloaders(hparams, audio_offset=0):
     # Get data, data loaders and collate function ready
-    trainset = TextMelLoader(hparams.training_files, hparams) # trainset.__getitem__(index) = (text, mel), text in [num_char], mel in [num_mel, ceil((len(audio)+1)/hop_length)]
-    valset = TextMelLoader(hparams.validation_files, hparams)
-    collate_fn = TextMelCollate(hparams.n_frames_per_step) #
-    train_sampler = DistributedSampler(trainset) \
-        if hparams.distributed_run else None
-    train_loader = DataLoader(trainset, num_workers=1, shuffle=False,
-                              sampler=train_sampler,
-                              batch_size=hparams.batch_size, pin_memory=False,
-                              drop_last=True, collate_fn=collate_fn)
-    return train_loader, valset, collate_fn, trainset
-
-def prepare_dataloaders(hparams):
-    # Get data, data loaders and collate function ready
-    trainset = TextMelLoader(hparams.training_files, hparams)
-    valset = TextMelLoader(hparams.validation_files, hparams,
-                           speaker_ids=trainset.speaker_ids)
+    trainset = TextMelLoader(hparams.training_files, hparams, TBPTT=False, check_files=False, verbose=True, audio_offset=audio_offset)
     collate_fn = TextMelCollate(hparams.n_frames_per_step)
 
     if hparams.distributed_run:
@@ -90,11 +76,12 @@ def prepare_dataloaders(hparams):
         train_sampler = None
         shuffle = False
 
-    train_loader = DataLoader(trainset, num_workers=1, shuffle=shuffle,
+    train_loader = DataLoader(trainset, num_workers=0, shuffle=shuffle,
                               sampler=train_sampler,
                               batch_size=hparams.batch_size, pin_memory=False, # default pin_memory=False, True should allow async memory transfers # Causes very random CUDA errors (after like 4+ hours)
                               drop_last=True, collate_fn=collate_fn)
-    return train_loader, valset, collate_fn, train_sampler, trainset
+    return train_loader, None, collate_fn, train_sampler, trainset
+
 
 def load_model(hparams):
     model = Tacotron2(hparams).cuda()
@@ -112,27 +99,58 @@ def warm_start_model(checkpoint_path, model):
     return model
 
 
+def get_global_mean(data_loader, global_mean_npy, hparams):
+    if global_mean_npy and os.path.exists(global_mean_npy):
+        global_mean = np.load(global_mean_npy)
+        return (torch.tensor(global_mean).half()).cuda() if hparams.fp16_run else (torch.tensor(global_mean).float()).cuda()
+    else:
+        raise Exception("No global_mean.npy found while in training_mode.")
+    return global_mean
+
+
+@torch.no_grad()
 def GTA_Synthesis(output_directory, checkpoint_path, n_gpus,
-          rank, group_name, hparams):
+          rank, group_name, hparams, training_mode, verify_outputs, use_val_files, fp16_save, extra_info='', audio_offset=0):
     """Generate Ground-Truth-Aligned Spectrograms for Training WaveGlow."""
+    if audio_offset:
+        hparams.load_mel_from_disk = False
     if hparams.distributed_run:
         init_distributed(hparams, n_gpus, rank, group_name)
     torch.manual_seed(hparams.seed)
     torch.cuda.manual_seed(hparams.seed)
+    
+    if use_val_files:
+        filelisttype = "val"
+        hparams.training_files = hparams.validation_files
+    else:
+        filelisttype = "train"
+    
+    train_loader, _, collate_fn, train_sampler, train_set = prepare_dataloaders(hparams, audio_offset=audio_offset)
+    
+    if training_mode and hparams.drop_frame_rate > 0.:
+        if rank != 0: # if global_mean not yet calcuated, wait for main thread to do it
+            while not os.path.exists(hparams.global_mean_npy): time.sleep(1)
+        global_mean = get_global_mean(train_loader, hparams.global_mean_npy, hparams)
+        hparams.global_mean = global_mean
+    
     model = load_model(hparams)
-    train_loader, valset, collate_fn, train_sampler, train_set = prepare_dataloaders(hparams)
     # Load checkpoint if one exists
     assert checkpoint_path is not None
     if checkpoint_path is not None:
         model = warm_start_model(checkpoint_path, model)
-    model.eval()
+    
+    if training_mode:
+        model.train()
+    else:
+        model.eval()
+    
     if hparams.distributed_run or torch.cuda.device_count() > 1:
         batch_parser = model.parse_batch
     else:
         batch_parser = model.parse_batch
         # ================ MAIN TRAINNIG LOOP! ===================
     os.makedirs(os.path.join(output_directory), exist_ok=True)
-    f = open(os.path.join(output_directory, f'map_{rank}.txt'),'w', encoding='utf-8')
+    f = open(os.path.join(output_directory, f'map_{filelisttype}_{rank}.txt'),'a', encoding='utf-8')
     os.makedirs(os.path.join(output_directory,'mels'), exist_ok=True)
     
     total_number_of_data = len(train_set.audiopaths_and_text)
@@ -154,12 +172,13 @@ def GTA_Synthesis(output_directory, checkpoint_path, n_gpus,
         indx_list = np.arange(i*hparams.batch_size, i*hparams.batch_size + batch_size).tolist()
         len_text_list = []
         for batch_index in indx_list:
-            text, _, _ = train_set.__getitem__(batch_index)
+            text, *_ = train_set.__getitem__(batch_index)
             len_text_list.append(text.size(0))
-        _, input_lengths, _, _, output_lengths, speaker_id = batch # output_lengths: original mel length
+        
+        _, input_lengths, _, _, output_lengths, speaker_id, _, _ = batch # output_lengths: original mel length
         input_lengths_, ids_sorted_decreasing = torch.sort(torch.LongTensor(len_text_list), dim=0, descending=True)
         ids_sorted_decreasing = ids_sorted_decreasing.numpy() # ids_sorted_decreasing, original index
-
+        
         org_audiopaths = [] # original_file_name
         mel_paths = []
         speaker_ids = []
@@ -172,29 +191,32 @@ def GTA_Synthesis(output_directory, checkpoint_path, n_gpus,
         x, _ = batch_parser(batch)
         _, mel_outputs_postnet, _, _ = model(x, teacher_force_till=9999, p_teacher_forcing=1.0)
         mel_outputs_postnet = mel_outputs_postnet.data.cpu().numpy()
-
+        
         for k in range(batch_size):
             wav_path = org_audiopaths[k].replace(".npy",".wav")
-            mel_path = mel_paths[k]+'.npy'
+            offset_append = '' if audio_offset == 0 else str(audio_offset)
+            mel_path = mel_paths[k]+offset_append+'.npy' # ext = '.mel.npy' or '.mel1.npy' ... '.mel599.npy'
             speaker_id = speaker_ids[k]
             map = "{}|{}|{}\n".format(wav_path,mel_path,speaker_id)
             f.write(map)
-            # To do: size mismatch
-            #diff = output_lengths[k] - (input_lengths[k] / hparams.hop_length)
-            #diff = diff.data.data.cpu().numpy()
+            
             mel = mel_outputs_postnet[k,:,:output_lengths[k]]
             print(wav_path, input_lengths[k], output_lengths[k], mel_outputs_postnet.shape, mel.shape, speaker_id)
+            if fp16_save:
+                mel = mel.astype(np.float16)
             np.save(mel_path, mel)
+            if verify_outputs:
+                orig_shape = train_set.get_mel(wav_path).shape
+                assert orig_shape == mel.shape, f"Target shape {orig_shape} does not match generated mel shape {mel.shape}.\nFilepath: '{wav_path}'" # check mel from wav_path has same shape as mel just saved
         duration = time.time() - duration
         avg_duration = rolling_sum.process(duration)
-        time_left = round(((total-i) / avg_duration)/3600, 2)
-        print(f'{i}/{total} compute and save GTA melspectrograms in {i}th batch, {duration}s, {time_left}hrs left')
+        time_left = round(((total-i) * avg_duration)/3600, 2)
+        print(f'{extra_info}{i}/{total} compute and save GTA melspectrograms in {i}th batch, {duration}s, {time_left}hrs left')
         duration = time.time()
     f.close()
 
+
 if __name__ == '__main__':
-    # run example
-    # python GTA.py -o=nam-h -c=nam_h_ep8/checkpoint_50000
     parser = argparse.ArgumentParser()
     parser.add_argument('-o', '--output_directory', type=str,
                         help='directory to save checkpoints')
@@ -204,21 +226,48 @@ if __name__ == '__main__':
                         required=False, help='number of gpus')
     parser.add_argument('--rank', type=int, default=0,
                         required=False, help='rank of current gpu')
+    parser.add_argument('--extremeGTA', type=int, default=0, required=False,
+                        help='Generate a Ground Truth Aligned output every interval specified. This will run tacotron hop_length//interval times per file and use thousands of GBs of storage. Caution is advised')
+    parser.add_argument('--use_training_mode', action='store_true',
+                        help='Use model.train() while generating alignments. Will increase variablility and increase inaccuracy.')
+    parser.add_argument('--verify_outputs', action='store_true',
+                        help='Check output length matches length of original wav input.')
+    parser.add_argument('--use_validation_files', action='store_true',
+                        help='Ground Truth Align validation files instead of training files.')
+    parser.add_argument('--fp16_save', action='store_true',
+                        help='Save spectrograms using np.float16.')
     parser.add_argument('--group_name', type=str, default='group_name',
                         required=False, help='Distributed group name')
     parser.add_argument('--hparams', type=str, required=False, help='comma separated name=value pairs')
-
+    
     args = parser.parse_args()
     hparams = create_hparams(args.hparams)
-
+    hparams.n_gpus = args.n_gpus
+    hparams.rank = args.rank
+    hparams.truncated_length = 2**15 # remove limit
+    
     torch.backends.cudnn.enabled = hparams.cudnn_enabled
     torch.backends.cudnn.benchmark = hparams.cudnn_benchmark
-
+    
     print("FP16 Run:", hparams.fp16_run)
     print("Dynamic Loss Scaling:", hparams.dynamic_loss_scaling)
     print("Distributed Run:", hparams.distributed_run)
     print("cuDNN Enabled:", hparams.cudnn_enabled)
     print("cuDNN Benchmark:", hparams.cudnn_benchmark)
     print("Rank:", args.rank)
-
-    GTA_Synthesis(args.output_directory, args.checkpoint_path, args.n_gpus, args.rank, args.group_name, hparams)
+    
+    # cookie stuff
+    hparams.load_mel_from_disk = False
+    hparams.training_files = hparams.training_files.replace("mel_train","train").replace("_merged.txt",".txt")
+    hparams.validation_files = hparams.validation_files.replace("mel_val","val").replace("_merged.txt",".txt")
+    
+    hparams.batch_size = hparams.batch_size * 6 # no gradients stored so batch size can go up a bunch
+    
+    torch.autograd.set_grad_enabled(False)
+    
+    if args.extremeGTA:
+        for ind, ioffset in enumerate(range(100, hparams.hop_length, args.extremeGTA)): # generate aligned spectrograms for all audio samples
+            if ind < 1: continue
+            GTA_Synthesis(args.output_directory, args.checkpoint_path, args.n_gpus, args.rank, args.group_name, hparams, args.use_training_mode, args.verify_outputs, args.use_validation_files, args.fp16_save, audio_offset=ioffset, extra_info=f"{ind}/{hparams.hop_length//args.extremeGTA} ")
+    else:
+        GTA_Synthesis(args.output_directory, args.checkpoint_path, args.n_gpus, args.rank, args.group_name, hparams, args.use_training_mode, args.verify_outputs, args.use_validation_files, args.fp16_save)
