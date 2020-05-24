@@ -1,0 +1,8 @@
+{
+    "model" : {
+        "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
+        "tacotron2" : "outdir_truncated1/checkpoint_71000",
+        "waveglow" : "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
+        "waveglowconfig" : "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
+    }
+}

@@ -85,7 +85,7 @@ def create_hparams(hparams_string=None, verbose=False):
         prenet_layers=2,        # 2 baseline
         prenet_batchnorm=False,  # False baseline
         p_prenet_dropout=0.5,   # 0.5 baseline
-        prenet_speaker_embed_dim=16, # speaker_embedding before encoder
+        prenet_speaker_embed_dim=0, # speaker_embedding before encoder
         
         # (Decoder) AttentionRNN
         attention_rnn_dim=1280, # 1024 baseline
