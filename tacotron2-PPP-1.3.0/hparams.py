@@ -22,6 +22,8 @@ def create_hparams(hparams_string=None, verbose=False):
         cudnn_benchmark=False,
         #ignore_layers=["decoder.attention_layer.F.2.weight", "decoder.attention_layer.F.2.bias","decoder.attention_layer.F.0.linear_layer.weight","decoder.attention_layer.F.0.linear_layer.bias"],
         ignore_layers=["encoder.lstm.weight_ih_l0","encoder.lstm.weight_hh_l0","encoder.lstm.bias_ih_l0","encoder.lstm.bias_hh_l0","encoder.lstm.weight_ih_l0_reverse","encoder.lstm.weight_hh_l0_reverse","encoder.lstm.bias_ih_l0_reverse","encoder.lstm.bias_hh_l0_reverse","decoder.attention_rnn.weight_ih","decoder.attention_rnn.weight_hh","decoder.attention_rnn.bias_ih","decoder.attention_rnn.bias_hh","decoder.attention_layer.query_layer.linear_layer.weight","decoder.attention_layer.memory_layer.linear_layer.weight","decoder.decoder_rnn.weight_ih","decoder.linear_projection.linear_layer.weight","decoder.gate_layer.linear_layer.weight"],
+        frozen_modules=[], # only the module names are required e.g: "encoder." will freeze all parameters INSIDE the encoder recursively
+        print_layer_names_during_startup=True,
         
         ################################
         # Data Parameters              #
@@ -66,8 +68,8 @@ def create_hparams(hparams_string=None, verbose=False):
         val_teacher_force_till=20,
         
         # (Encoder) Encoder parameters
-        encoder_speaker_embed_dim=256, # speaker_embedding before encoder
-        encoder_concat_speaker_embed='before_lstm', # concat before encoder convs, or just before the LSTM inside decode. Options 'before_conv','before_lstm'
+        encoder_speaker_embed_dim=64, # speaker_embedding before encoder
+        encoder_concat_speaker_embed='before_conv', # concat before encoder convs, or just before the LSTM inside decode. Options 'before_conv','before_lstm'
         encoder_kernel_size=5,
         encoder_n_convolutions=3,
         encoder_conv_hidden_dim=512,
@@ -81,7 +83,7 @@ def create_hparams(hparams_string=None, verbose=False):
         context_frames=1,   # TODO TODO TODO TODO TODO
         
         # (Decoder) Prenet
-        prenet_dim=256,         # 256 baseline
+        prenet_dim=512,         # 256 baseline
         prenet_layers=2,        # 2 baseline
         prenet_batchnorm=False,  # False baseline
         p_prenet_dropout=0.5,   # 0.5 baseline
@@ -102,7 +104,7 @@ def create_hparams(hparams_string=None, verbose=False):
         decoder_rnn_dim=1792,   # 1024 baseline
         extra_projection=False, # another linear between decoder_rnn and the linear projection layer (hopefully helps with high sampling rates and hopefully doesn't help decoder_rnn overfit)
         DecRNN_hidden_dropout_type='zoneout',# options ('dropout','zoneout')
-        p_DecRNN_hidden_dropout=0.1,     # 0.1 baseline
+        p_DecRNN_hidden_dropout=0.2,     # 0.1 baseline
         p_DecRNN_cell_dropout=0.00,       # 0.0 baseline
         
         # (Decoder) Attention parameters

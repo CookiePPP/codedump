@@ -320,7 +320,19 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     model = load_model(hparams)
     model.eval()
     learning_rate = hparams.learning_rate
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=hparams.weight_decay)
+    
+    # (optional)
+    if hparams.print_layer_names_during_startup:
+        print(*[f"Layer{i} = "+str(x[0]) for i,x in enumerate(list(model.named_parameters()))], sep="\n")
+    
+    # (optional) Freeze layers by disabled grads
+    if len(hparams.frozen_modules):
+        for layer, params in list(model.named_parameters()):
+            if any(layer.startswith(module) for module in hparams.frozen_modules):
+                params.requires_grad = False
+                print(f"Layer: {layer} has been frozen")
+    
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate, weight_decay=hparams.weight_decay)
     #optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate, weight_decay=hparams.weight_decay)
     
     if hparams.fp16_run:

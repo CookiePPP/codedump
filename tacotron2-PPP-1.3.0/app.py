@@ -12,36 +12,51 @@ t2s = T2S()
 speakers = [x for x in list(t2s.tt_sp_name_lookup.keys()) if "(Music)" not in x]
 infer_dir = "server_infer"
 
-# default config
+# default html config
 sample_background_text = "Enter text." # this is the faded out text when nothing has been entered
 sample_speaker = ["(Show) My Little Pony_Twilight",]
 sample_style_mode = "torchmoji_hidden"
 sample_textseg_mode="segment_by_line"
 sample_batch_mode="nochange"
-sample_max_attempts=128
+sample_max_attempts=256
 sample_max_duration_s=12
-sample_batch_size=128
+sample_batch_size=256
 sample_dyna_max_duration_s = 0.3
+sample_use_arpabet = "on"
+sample_target_score = 0.8
+sample_multispeaker_mode = "interleaved"
+sample_cat_silence_s = 0.1
+
 # Initialize Flask.
 app = Flask(__name__)
 
 @app.route('/tts', methods=['GET', 'POST'])
 def texttospeech():
     if request.method == 'POST':
+        print("REQUEST RECIEVED")
+        # grab all the form inputs
         result = request.form
-        speaker = request.form.getlist('input_speaker')
-        text = result['input_text']
-        style_mode = result['input_style_mode']
-        textseg_mode = result['input_textseg_mode']
-        batch_mode = result['input_batch_mode']
-        max_attempts = result['input_max_attempts']
-        max_duration_s = result['input_max_duration_s']
-        batch_size = result['input_batch_size']
-        dyna_max_duration_s = result['dyna_max_duration_s']
-        print(f"REQUEST RECIEVED\nText: '{text}'\nSpeaker: '{speaker}'\nStyle Mode: '{style_mode}'\nBatch Size: {result['input_batch_size']}")
         
-        filename = t2s.infer(text, speaker, style_mode)
+        speaker = result.getlist('input_speaker')
+        text = result.get('input_text')
+        style_mode = result.get('input_style_mode')
+        textseg_mode = result.get('input_textseg_mode')
+        batch_mode = result.get('input_batch_mode')
+        max_attempts = int(result.get('input_max_attempts'))
+        max_duration_s = float(result.get('input_max_duration_s'))
+        batch_size = int(result.get('input_batch_size'))
+        dyna_max_duration_s = float(result.get('input_dyna_max_duration_s'))
+        use_arpabet = True if result.get('input_use_arpabet') == "on" else False
+        target_score = float(result.get('input_target_score'))
+        multispeaker_mode = result.get('input_multispeaker_mode')
+        cat_silence_s = float(result.get('input_cat_silence_s'))
+        print(result)
+        
+        # generate an audio file from the inputs
+        filename, gen_time, gen_dur = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
         print(f"GENERATED {filename}")
+        
+        # send updated webpage back to client along with page to the file
         return render_template('main.html',
                                 sp_len=len(speakers),
                                 speakers_available_short=[sp.split("_")[-1] for sp in speakers],
@@ -56,7 +71,13 @@ def texttospeech():
                                 max_attempts=max_attempts,
                                 max_duration_s=max_duration_s,
                                 batch_size=batch_size,
-                                dyna_max_duration_s=dyna_max_duration_s,)
+                                dyna_max_duration_s=dyna_max_duration_s,
+                                use_arpabet=result.get('input_use_arpabet'),
+                                target_score=target_score,
+                                gen_time=round(gen_time,2),
+                                gen_dur=round(gen_dur,2),
+                                multispeaker_mode=multispeaker_mode,
+                                cat_silence_s=cat_silence_s,)
 
 #Route to render GUI
 @app.route('/')
@@ -75,7 +96,13 @@ def show_entries():
                             max_attempts=sample_max_attempts,
                             max_duration_s=sample_max_duration_s,
                             batch_size=sample_batch_size,
-                            dyna_max_duration_s=sample_dyna_max_duration_s,)
+                            dyna_max_duration_s=sample_dyna_max_duration_s,
+                            use_arpabet=sample_use_arpabet,
+                            target_score=sample_target_score,
+                            gen_time="",
+                            gen_dur="",
+                            multispeaker_mode=sample_multispeaker_mode,
+                            cat_silence_s=sample_cat_silence_s,)
 
 #Route to stream music
 @app.route('/<voice>', methods=['GET'])

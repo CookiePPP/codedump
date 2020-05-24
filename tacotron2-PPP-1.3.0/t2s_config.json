@@ -1,8 +1,28 @@
 {
-    "model" : {
+    "dict_path": "G:/TwiBot/tacotron2/filelists/merged.dict_.txt",
+    "tacotron": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
-        "tacotron2" : "outdir_truncated1/checkpoint_71000",
-        "waveglow" : "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
-        "waveglowconfig" : "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
+        "use_speaker_ids_file_override": true,
+        "models": {
+            "tacotron2_torchmoji_1.0_baseline": {
+                "modelpath": "outdir_truncated1/checkpoint_41000"
+            }
+            "tacotron2_torchmoji_1.1_largeDecoderLSTM": {
+                "modelpath": "outdir_truncated1/checkpoint_71000"
+            }
+            "tacotron2_torchmoji_1.1_largePrenet": {
+                "modelpath": "outdir_truncated1/checkpoint_9000"
+            }
+        }
+    },
+    "waveglow": {
+        "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
+        "use_speaker_ids_file_override": true,
+        "models": {
+            "MiniWaveGlow_2": {
+                "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
+                "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
+            }
+        }
     }
 }
