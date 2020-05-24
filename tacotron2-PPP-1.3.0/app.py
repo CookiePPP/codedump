@@ -10,9 +10,14 @@ import os
 
 t2s = T2S()
 speakers = [x for x in list(t2s.tt_sp_name_lookup.keys()) if "(Music)" not in x]
+tacotron_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['tacotron']['models'].items())]
+waveglow_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['waveglow']['models'].items())]
 infer_dir = "server_infer"
 
 # default html config
+sample_tacotron = "Tacotron2 Torchmoji v1.1 (Baseline)"
+sample_waveglow = "MiniWaveGlow V2 (GT, 16 Flow, n_group 120)"
+sample_current_text = "" # default text entered
 sample_background_text = "Enter text." # this is the faded out text when nothing has been entered
 sample_speaker = ["(Show) My Little Pony_Twilight",]
 sample_style_mode = "torchmoji_hidden"
@@ -50,7 +55,17 @@ def texttospeech():
         target_score = float(result.get('input_target_score'))
         multispeaker_mode = result.get('input_multispeaker_mode')
         cat_silence_s = float(result.get('input_cat_silence_s'))
+        wg_current = result.get('input_wg_current')
+        tt_current = result.get('input_tt_current')
         print(result)
+        
+        # update tacotron if needed
+        if t2s.tt_current != tt_current:
+            t2s.update_tt(tt_current)
+        
+        # update waveglow if needed
+        if t2s.wg_current != wg_current:
+            t2s.update_wg(wg_current)
         
         # generate an audio file from the inputs
         filename, gen_time, gen_dur = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
@@ -58,6 +73,12 @@ def texttospeech():
         
         # send updated webpage back to client along with page to the file
         return render_template('main.html',
+                                tacotron_conf=tacotron_conf,
+                                tt_current=tt_current,
+                                tt_len=len(tacotron_conf),
+                                waveglow_conf=waveglow_conf,
+                                wg_current=wg_current,
+                                wg_len=len(waveglow_conf),
                                 sp_len=len(speakers),
                                 speakers_available_short=[sp.split("_")[-1] for sp in speakers],
                                 speakers_available=speakers,
@@ -83,10 +104,16 @@ def texttospeech():
 @app.route('/')
 def show_entries():
     return render_template('main.html',
+                            tacotron_conf=tacotron_conf,
+                            tt_current=sample_tacotron,
+                            tt_len=len(tacotron_conf),
+                            waveglow_conf=waveglow_conf,
+                            wg_current=sample_waveglow,
+                            wg_len=len(waveglow_conf),
                             sp_len=len(speakers),
                             speakers_available_short=[sp.split("_")[-1] for sp in speakers],
                             speakers_available=speakers,
-                            current_text='',
+                            current_text=sample_current_text,
                             sample_text=sample_background_text,
                             voice=None,
                             speaker=sample_speaker,

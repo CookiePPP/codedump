@@ -105,11 +105,13 @@ class T2S:
         # load Tacotron2
         tacotron_path = list(self.conf['tacotron']['models'].values())[0]['modelpath'] # get first available Tacotron
         self.tacotron, self.tt_hparams, self.tt_sp_name_lookup, self.tt_sp_id_lookup = self.load_tacotron2(tacotron_path)
+        self.tt_current = list(self.conf['tacotron']['models'].keys())[0]
         
         # load WaveGlow
         waveglow_path = list(self.conf['waveglow']['models'].values())[0]['modelpath'] # get first available waveglow
         waveglow_confpath = list(self.conf['waveglow']['models'].values())[0]['configpath']
         self.waveglow, self.wg_denoiser, self.wg_train_sigma, self.wg_sp_id_lookup = self.load_waveglow(waveglow_path, waveglow_confpath)
+        self.wg_current = list(self.conf['waveglow']['models'].keys())[0]
         
         # load torchMoji
         if self.tt_hparams.torchMoji_linear: # if Tacotron includes a torchMoji layer
@@ -233,6 +235,10 @@ class T2S:
         return waveglow, denoiser, training_sigma, speaker_lookup
     
     
+    def update_wg(self, waveglow_name):
+        self.waveglow, self.wg_denoiser, self.wg_sp_id_lookup = self.load_waveglow(self.conf['waveglow']['models'][waveglow_name]['modelpath'])
+        self.wg_current = waveglow_name
+    
     def load_tacotron2(self, tacotron_path):
         """Loads tacotron2,
         Returns:
@@ -253,6 +259,14 @@ class T2S:
         tacotron_speaker_id_lookup = checkpoint['speaker_id_lookup'] # save speaker_id lookup
         print(f"This Tacotron model has been trained for {checkpoint['iteration']} Iterations.")
         return model, checkpoint_hparams, tacotron_speaker_name_lookup, tacotron_speaker_id_lookup
+    
+    
+    def update_tt(self, tacotron_name):
+        self.model, self.tt_hparams, self.tt_sp_name_lookup, self.tt_sp_id_lookup = self.load_tacotron2(self.conf['tacotron']['models'][tacotron_name]['modelpath'])
+        self.tt_current = tacotron_name
+        
+        if self.conf['tacotron']['use_speaker_ids_file_override']:# (optional) override
+            self.tt_sp_name_lookup = {name: self.tt_sp_id_lookup[int(ext_id)] for _, name, ext_id in load_filepaths_and_text(self.conf['tacotron']['speaker_ids_file'])}
     
     
     def get_wg_sp_id_from_tt_sp_names(self, names):

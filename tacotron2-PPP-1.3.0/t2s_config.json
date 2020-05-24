@@ -4,13 +4,13 @@
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
         "models": {
-            "tacotron2_torchmoji_1.0_baseline": {
+            "Tacotron2 Torchmoji v0.2 (Baseline)": {
                 "modelpath": "outdir_truncated1/checkpoint_41000"
-            }
-            "tacotron2_torchmoji_1.1_largeDecoderLSTM": {
+            },
+            "Tacotron2 Torchmoji v0.21 (Large DecoderLSTM)": {
                 "modelpath": "outdir_truncated1/checkpoint_71000"
-            }
-            "tacotron2_torchmoji_1.1_largePrenet": {
+            },
+            "Tacotron2 Torchmoji v0.22 (Large Prenet)": {
                 "modelpath": "outdir_truncated1/checkpoint_9000"
             }
         }
@@ -19,7 +19,19 @@
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
         "models": {
-            "MiniWaveGlow_2": {
+            "MiniWaveGlow V2 (GT, 16 Flow, n_group 120)": {
+                "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
+                "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
+            },
+            "WaveGlow V5 (Postnet, 12 Flow, n_group 24)": {
+                "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing5/best_val_model",
+                "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing5/config.json"
+            },
+            "LargeWaveGlow V1 (GT, 24 Flow, n_group 10)": {
+                "modelpath": "H:\TTCheckpoints\waveglow\outdir_EfficientLarge/best_model",
+                "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientLarge/config.json"
+            },
+            "LargeWaveGlow V3.5 (GT, 48 Flow, n_group 24)": {
                 "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
                 "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
             }

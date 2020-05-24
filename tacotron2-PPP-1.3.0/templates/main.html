@@ -52,7 +52,7 @@
 
 
     <div class="w-50 p-3 ml-3" style="margin: auto auto!important;">
-        <a href="/">Home</a>
+        <a href="/">Home/Reset</a>
 
 
         <div id="content" class="jumbotron">
@@ -62,82 +62,83 @@
             <form id="input_form" name="input_form" method="POST" action="/tts">
                 <div class="form-group">
                     <label for="select">Spectrogram --> Waveform Model</label>
-                    <select name="input_vocoder_model" class="form-control">
-                        <option value="na" selected>MiniWaveGlow V2 (GT, 16 Flow, n_group 120)</option>
-                        <option value="na" disabled>WaveGlow V5 (Postnet, 12 Flow, n_group 24)</option>
-                        <option value="na" disabled>LargeWaveGlow V1 (GT, 24 Flow, n_group 10)</option>
-                        <option value="na" disabled>LargeWaveGlow V3.5 (GT, 48 Flow, n_group 24)</option>
+                    <select name="input_wg_current" class="form-control">
+                        {%for i in range(0, wg_len)%}
+                        <option value='{{waveglow_conf[i][0][9:] if "[MISSING]" in waveglow_conf[i][0] else waveglow_conf[i][0]}}' {{ 'selected' if tt_current == waveglow_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in waveglow_conf[i][0] else ''}}>{{waveglow_conf[i][0]}}</option>
+                        {%endfor%}
                     </select></div>
                 <div class="form-group">
                     <label for="select">Text --> Spectogram Model</label>
-                    <select name="input_texttomel_model" class="form-control">
-                        <option value="na" selected>Tacotron2 Torchmoji v1.1 (Large DecoderLSTM)</option>
+                    <select name="input_tt_current" class="form-control">
+                        {%for i in range(0, tt_len)%}
+                        <option value='{{tacotron_conf[i][0]}}' {{ 'selected' if tt_current == tacotron_conf[i][0] else '' }}>{{tacotron_conf[i][0]}}</option>
+                        {%endfor%}
                     </select></div>
                 <button class="collapsible" type="button">Advanced Options</button>
-                <div class="form-group content">
-                    <div class="form-group">
-                        <label for="select">Use Pronounciation Dictionary (ARPAbet)</label>
-                        <input style="width: 3em;" class="form-control" type={{"checkbox" if use_arpabet else ""}} name="input_use_arpabet" checked="">
+                    <div class="form-group content" style="box-shadow: #777777 0px 0px 0px 3px inset;">
+                        <div class="form-group" style="margin-top: 1em;">
+                            <label for="select">Use Pronounciation Dictionary (ARPAbet)</label>
+                            <input style="width: 3em;" class="form-control" type={{"checkbox" if use_arpabet else ""}} name="input_use_arpabet" checked="">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Multispeaker Mode</label>
+                            <select name="input_multispeaker_mode" class="form-control">
+                                <option value="random" {{ 'selected' if multispeaker_mode == 'random' else '' }}>Random (randomly select the speaker)</option>
+                                <option value="interleaved" {{ 'selected' if multispeaker_mode == 'interleaved' else '' }}>Interleaved (seperate speaker for each text segment, going from top to bottom)</option>
+                                <option value="not_interleaved" {{ 'selected' if multispeaker_mode == 'not_interleaved' else '' }}>Non-Interleaved (speaker going from top to bottom per clip attempt)</option>
+                            </select></div>
+                        <div class="form-group">
+                            <label for="select">Silence between clips (Seconds)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{cat_silence_s}}" type="number" min="0.0" step="0.01" name="input_cat_silence_s">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Batch Size</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{batch_size}}" type="number" min="1" step="1" name="input_batch_size">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Max Duration (Seconds)</label>
+                            <label style="zoom: 0.7;">(This will control the amount of VRAM used and will kill collapsed clips faster - therefore run faster on batched inputs.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{max_duration_s}}" type="number" min="0.1" step="0.1" name="input_max_duration_s">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Dynamic Max Duration Scaler</label>
+                            <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.3 gives 300 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.1" step="0.0125" name="input_dyna_max_duration_s">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Max Attempts</label>
+                            <label style="zoom: 0.7;">(This is the maximum number of times the same clip can be attempted - in case one of them fails. If batch size and max attempts are equal, then it will take 1 pass to generate the clip.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{max_attempts}}" type="number" min="1" step="1" name="input_max_attempts">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Target Score</label>
+                            <label style="zoom: 0.7;">(Model will stop making attempts once Target Score is reached. This is quite hard to describe so it's probably best to just max it out and pick the best of "Max Attempts" instead of early stopping.)</label>
+                            <input style="width: -webkit-fill-available;padding-right: 0px;padding-left: 0px;margin-right: 2em;margin-left: 2em;" class="form-control" value={{target_score}} type="range" name="input_target_score" min="-0.2" max="0.8" step="0.01">
+                        </div>
+                        <div class="form-group">
+                            <label for="select">Batch Mode</label>
+                            <select name="input_batch_mode" class="form-control">
+                                <option value="scaleup" {{ 'selected' if batch_mode == 'scaleup' else '' }}>Scale (increase) batch size for multiple inputs. (Run each input at the same time, but potentially hit VRAM limits.)</option>
+                                <option value="nochange" {{ 'selected' if batch_mode == 'nochange' else '' }}>Same batch size for multiple inputs. (Run each input one after the other if more inputs than batch size/max attempts.)</option>
+                                <option value="scaledown" {{ 'selected' if batch_mode == 'scaledown' else '' }}>Decrease batch size for multiple inputs. (Run each input at the same time, but decrease stability if over batch size/max attempts.)</option>
+                            </select></div>
+                        <div class="form-group">
+                            <label for="select">Input Segmentation Mode</label>
+                            <select name="input_textseg_mode" class="form-control">
+                                <option value="no_segmentation" {{ 'selected' if textseg_mode == 'no_segmentation' else '' }}>Feed entire text into model</option>
+                                <option value="segment_by_line" {{ 'selected' if textseg_mode == 'segment_by_line' else '' }}>Split text by lines</option>
+                                <option value="segment_by_sentence" {{ 'selected' if textseg_mode == 'segment_by_sentence' else '' }}>Split text by sentences</option>
+                                <option value="segment_by_sentencequote" {{ 'selected' if textseg_mode == 'segment_by_sentencequote' else '' }}>Split text by sentences and quotes</option>
+                            </select></div>
+                        <div class="form-group">
+                            <label for="select">Style Mode</label>
+                            <select name="input_style_mode" class="form-control">
+                                <option value="torchmoji_hidden" {{ 'selected' if style_mode == 'torchmoji_hidden' else '' }}>Infer emotion from text via TorchMoji</option>
+                                <option disabled value="mel" {{ 'selected' if style_mode == 'mel' else '' }}>Reference Audio Style</option>
+                                <option disabled value="token" {{ 'selected' if style_mode == 'token' else '' }}>Manual Style Tokens</option>
+                                <option disabled value="zeros" {{ 'selected' if style_mode == 'zeros' else '' }}>Neutral/None</option>
+                            </select></div>
                     </div>
-                    <div class="form-group">
-                        <label for="select">Multispeaker Mode</label>
-                        <select name="input_multispeaker_mode" class="form-control">
-                            <option value="random" {{ 'selected' if multispeaker_mode == 'random' else '' }}>Random (randomly select the speaker)</option>
-                            <option value="interleaved" {{ 'selected' if multispeaker_mode == 'interleaved' else '' }}>Interleaved (seperate speaker for each text segment, going from top to bottom)</option>
-                            <option value="not_interleaved" {{ 'selected' if multispeaker_mode == 'not_interleaved' else '' }}>Non-Interleaved (speaker going from top to bottom per clip attempt)</option>
-                        </select></div>
-                    <div class="form-group">
-                        <label for="select">Silence between clips (Seconds)</label>
-                        <input style="width: -webkit-fill-available;" class="form-control" value="{{cat_silence_s}}" type="number" min="0.0" step="0.01" name="input_cat_silence_s">
-                    </div>
-                    <div class="form-group">
-                        <label for="select">Batch Size</label>
-                        <input style="width: -webkit-fill-available;" class="form-control" value="{{batch_size}}" type="number" min="1" step="1" name="input_batch_size">
-                    </div>
-                    <div class="form-group">
-                        <label for="select">Max Duration (Seconds)</label>
-                        <label style="zoom: 0.7;">(This will control the amount of VRAM used and will kill collapsed clips faster - therefore run faster on batched inputs.)</label>
-                        <input style="width: -webkit-fill-available;" class="form-control" value="{{max_duration_s}}" type="number" min="0.1" step="0.1" name="input_max_duration_s">
-                    </div>
-                    <div class="form-group">
-                        <label for="select">Dynamic Max Duration Scaler</label>
-                        <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.3 gives 300 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
-                        <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.1" step="0.0125" name="input_dyna_max_duration_s">
-                    </div>
-                    <div class="form-group">
-                        <label for="select">Max Attempts</label>
-                        <label style="zoom: 0.7;">(This is the maximum number of times the same clip can be attempted - in case one of them fails. If batch size and max attempts are equal, then it will take 1 pass to generate the clip.)</label>
-                        <input style="width: -webkit-fill-available;" class="form-control" value="{{max_attempts}}" type="number" min="1" step="1" name="input_max_attempts">
-                    </div>
-                    <div class="form-group">
-                        <label for="select">Target Score</label>
-                        <label style="zoom: 0.7;">(Model will stop making attempts once Target Score is reached. This is quite hard to describe so it's probably best to just max it out and pick the best of "Max Attempts" instead of early stopping.)</label>
-                        <input style="width: -webkit-fill-available;padding-right: 0px;padding-left: 0px;margin-right: 2em;margin-left: 2em;" class="form-control" value={{target_score}} type="range" name="input_target_score" min="-0.2" max="0.8" step="0.01">
-                    </div>
-                    <div class="form-group">
-                        <label for="select">Batch Mode</label>
-                        <select name="input_batch_mode" class="form-control">
-                            <option value="scaleup" {{ 'selected' if batch_mode == 'scaleup' else '' }}>Scale (increase) batch size for multiple inputs. (Run each input at the same time, but potentially hit VRAM limits.)</option>
-                            <option value="nochange" {{ 'selected' if batch_mode == 'nochange' else '' }}>Same batch size for multiple inputs. (Run each input one after the other if more inputs than batch size/max attempts.)</option>
-                            <option value="scaledown" {{ 'selected' if batch_mode == 'scaledown' else '' }}>Decrease batch size for multiple inputs. (Run each input at the same time, but decrease stability if over batch size/max attempts.)</option>
-                        </select></div>
-                    <div class="form-group">
-                        <label for="select">Input Segmentation Mode</label>
-                        <select name="input_textseg_mode" class="form-control">
-                            <option value="no_segmentation" {{ 'selected' if textseg_mode == 'no_segmentation' else '' }}>Feed entire text into model</option>
-                            <option value="segment_by_line" {{ 'selected' if textseg_mode == 'segment_by_line' else '' }}>Split text by lines</option>
-                            <option value="segment_by_sentence" {{ 'selected' if textseg_mode == 'segment_by_sentence' else '' }}>Split text by sentences</option>
-                            <option value="segment_by_sentencequote" {{ 'selected' if textseg_mode == 'segment_by_sentencequote' else '' }}>Split text by sentences and quotes</option>
-                        </select></div>
-                    <div class="form-group">
-                        <label for="select">Style Mode</label>
-                        <select name="input_style_mode" class="form-control">
-                            <option value="torchmoji_hidden" {{ 'selected' if style_mode == 'torchmoji_hidden' else '' }}>Infer emotion from text via TorchMoji</option>
-                            <option disabled value="mel" {{ 'selected' if style_mode == 'mel' else '' }}>Reference Audio Style</option>
-                            <option disabled value="token" {{ 'selected' if style_mode == 'token' else '' }}>Manual Style Tokens</option>
-                            <option disabled value="zeros" {{ 'selected' if style_mode == 'zeros' else '' }}>Neutral/None</option>
-                        </select></div>
-                </div>
                 <div class="form-group">
                     <label for="select">Speaker(s)</label>
                     <select name="input_speaker" class="form-control" style="height: 15em; resize: vertical;" multiple>
