@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"
+        integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+    <title>The Text to Speech App</title>
+    <link rel="shortcut icon" href="/wavs/favicon.ico">
+
+</head>
+
+<body>
+
+
+    <div class="w-50 p-3 ml-3" style="margin: auto auto!important;">
+        <a href="/">Home</a>
+
+
+        <div id="content" class="jumbotron">
+            <h1 class="display-4">Text To Speech </h1>
+            <p class="lead">NVIDIA Tacotron2 (with Cookie modifications) and WaveGlow TTS models.</p>
+            <hr class="my-4">
+            <form id="input_form" name="input_form" method="POST" action="/tts">
+                <div class="form-group">
+                    <label for="select">Batch Size</label>
+                    <input style="width: -webkit-fill-available;" class="form-control" value="16" type="number" min="1" step="1" name="input_batch_size">
+                </div>
+                <div class="form-group">
+                    <label for="select">Max Duration (Seconds)</label>
+                    <label style="zoom: 0.7;">(This will control the amount of VRAM used and will kill collapsed clips faster - therefore run faster on batched inputs.)</label>
+                    <input style="width: -webkit-fill-available;" class="form-control" value="{{max_duration_s}}" type="number" min="0.1" step="0.1" name="input_max_duration_s">
+                </div>
+                <div class="form-group">
+                    <label for="select">Dynamic Max Duration Scaler</label>
+                    <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.3 gives 300 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
+                    <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.1" step="0.0125" name="input_dyna_max_duration_s">
+                </div>
+                <div class="form-group">
+                    <label for="select">Max Attempts</label>
+                    <label style="zoom: 0.7;">(This is the maximum number of times the same clip can be attempted - in case one of them fails. If batch size and max attempts are equal, then it will take 1 pass to generate the clip.)</label>
+                    <input style="width: -webkit-fill-available;" class="form-control" value="{{max_attempts}}" type="number" min="1" step="1" name="input_max_attempts">
+                </div>
+                <div class="form-group">
+                    <label for="select">Batch Mode</label>
+                    <select name="input_batch_mode" class="form-control">
+                        <option value="scaleup" {{ 'selected' if batch_mode == 'scaleup' else '' }}>Scale (increase) batch size for multiple inputs. (Run each input at the same time, but potentially hit VRAM limits.)</option>
+                        <option value="nochange" {{ 'selected' if batch_mode == 'nochange' else '' }}>Same batch size for multiple inputs. (Run each input one after the other if more inputs than batch size/max attempts.)</option>
+                        <option value="scaledown" {{ 'selected' if batch_mode == 'scaledown' else '' }}>Decrease batch size for multiple inputs. (Run each input at the same time, but decrease stability if over batch size/max attempts.)</option>
+                    </select></div>
+                <div class="form-group">
+                    <label for="select">Input Segmentation Mode</label>
+                    <select name="input_textseg_mode" class="form-control">
+                        <option value="no_segmentation" {{ 'selected' if textseg_mode == 'no_segmentation' else '' }}>Feed entire text into model</option>
+                        <option value="segment_by_line" {{ 'selected' if textseg_mode == 'segment_by_line' else '' }}>Split text by lines</option>
+                        <option value="segment_by_sentence" {{ 'selected' if textseg_mode == 'segment_by_sentence' else '' }}>Split text by sentences</option>
+                        <option value="segment_by_sentencequote" {{ 'selected' if textseg_mode == 'segment_by_sentencequote' else '' }}>Split text by sentences and quotes</option>
+                    </select></div>
+                <div class="form-group">
+                    <label for="select">Style Mode</label>
+                    <select name="input_style_mode" class="form-control">
+                        <option value="torchmoji_hidden" {{ 'selected' if style_mode == 'torchmoji_hidden' else '' }}>Infer emotion from Text via TorchMoji</option>
+                        <option disabled value="mel" {{ 'selected' if style_mode == 'mel' else '' }}>Reference Audio Style</option>
+                        <option disabled value="token" {{ 'selected' if style_mode == 'token' else '' }}>Manual Style Tokens</option>
+                        <option disabled value="zeros" {{ 'selected' if style_mode == 'zeros' else '' }}>Neutral/None</option>
+                    </select></div>
+                <div class="form-group">
+                    <label for="select">Speaker(s)</label>
+                    <select name="input_speaker" class="form-control" style="height: 300px;" multiple>
+                        {%for i in range(0, sp_len)%}
+                        <option value='{{speakers_available[i]}}' {{ 'selected' if speakers_available[i] in speaker else '' }}>{{speakers_available_short[i]}}</option>
+                        {%endfor%}
+                    </select></div>
+                <div class="form-group">
+                    <label for="select">Text</label>
+                    <textarea class="form-control" id="text_area" name="input_text" placeholder="{{sample_text}}"
+                        cols="40" rows="8">{{current_text}}</textarea></div>
+                <div id="btns" class="form-group">
+                    <input id="btn" type="submit" class="btn btn-primary mb-2" value="Generate" />
+                </div>
+            </form>
+            <div id="warning" class="alert alert-warning" role="alert" style="display: none">
+                No Text Input
+              </div>
+            
+            <hr class="my-4">
+            {% if voice %}
+            <div class="media">
+                <div class="media-body pull-right">
+                    <p class="lead"> Result </p>
+
+                    <audio controls preload="auto" autoplay>
+                        <source src="http://localhost:5000/{{voice}}" type="audio/mp3">
+                    </audio>
+                </div>
+                {% endif %}
+
+            </div>
+        </div>
+        <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.6.2/jquery.min.js"></script>
+        <script type="text/javascript">
+            $(document).ready(() => {
+                $("#btns").prepend('<div id="loading" style="display : none;" ><button class="btn btn-primary" type="button" disabled><span class="spinner-grow spinner-grow-sm" role="status" aria-hidden="true"></span>Loading...</button></div>')
+            });
+
+            $("#input_form").submit(() => {
+                var pass = true;
+                if (pass == false) {
+                    return true
+                }
+                
+                if (!$("#text_area").val()) {
+                    $('#warning').show();
+                    return false;
+                } else {
+                    $("#loading").show();
+                    $("#btn").hide()
+                    $('#warning').hide();
+                    return true;
+                }
+
+            });
+
+
+        </script>
+        <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+            integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo"
+            crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"
+            integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1"
+            crossorigin="anonymous"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"
+            integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM"
+            crossorigin="anonymous"></script>
+
+
+</body>
+
+</html>

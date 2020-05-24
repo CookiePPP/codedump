@@ -266,8 +266,9 @@ if __name__ == '__main__':
     torch.autograd.set_grad_enabled(False)
     
     if args.extremeGTA:
-        for ind, ioffset in enumerate(range(100, hparams.hop_length, args.extremeGTA)): # generate aligned spectrograms for all audio samples
-            if ind < 1: continue
+        for ind, ioffset in enumerate(range(0, hparams.hop_length, args.extremeGTA)): # generate aligned spectrograms for all audio samples
+            if ind < 0: continue
             GTA_Synthesis(args.output_directory, args.checkpoint_path, args.n_gpus, args.rank, args.group_name, hparams, args.use_training_mode, args.verify_outputs, args.use_validation_files, args.fp16_save, audio_offset=ioffset, extra_info=f"{ind}/{hparams.hop_length//args.extremeGTA} ")
     else:
         GTA_Synthesis(args.output_directory, args.checkpoint_path, args.n_gpus, args.rank, args.group_name, hparams, args.use_training_mode, args.verify_outputs, args.use_validation_files, args.fp16_save)
+    print("GTA Done!")
