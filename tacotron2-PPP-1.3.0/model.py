@@ -424,9 +424,9 @@ class Decoder(nn.Module):
         self.decoder_rnn_dim = hparams.decoder_rnn_dim
         self.prenet_dim = hparams.prenet_dim
         self.prenet_layers = hparams.prenet_layers
-        self.prenet_batchnorm = hparams.prenet_batchnorm
+        self.prenet_batchnorm = hparams.prenet_batchnorm if hasattr(hparams, 'prenet_batchnorm') else False
         self.p_prenet_dropout = hparams.p_prenet_dropout
-        self.prenet_speaker_embed_dim = hparams.prenet_speaker_embed_dim
+        self.prenet_speaker_embed_dim = hparams.prenet_speaker_embed_dim if hasattr(hparams, 'prenet_speaker_embed_dim') else 0
         self.max_decoder_steps = hparams.max_decoder_steps
         self.gate_threshold = hparams.gate_threshold
         self.AttRNN_extra_decoder_input = hparams.AttRNN_extra_decoder_input
@@ -444,7 +444,7 @@ class Decoder(nn.Module):
         self.normalize_AttRNN_output = hparams.normalize_AttRNN_output
         self.attention_type = hparams.attention_type
         self.attention_layers = hparams.attention_layers
-        self.low_vram_inference = hparams.low_vram_inference
+        self.low_vram_inference = hparams.low_vram_inference if hasattr(hparams, 'low_vram_inference') else False
         self.context_frames = hparams.context_frames
         self.hide_startstop_tokens = hparams.hide_startstop_tokens
         
