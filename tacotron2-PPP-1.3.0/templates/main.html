@@ -164,9 +164,15 @@
             <div class="media">
                 <div class="media-body pull-right">
                     <p class="lead"> Result </p>
+                    {% if use_localhost %}
+                    <audio controls preload="auto" autoplay>
+                        <source src="http://localhost:5000/{{voice}}" type="audio/wav">
+                    </audio>
+                    {% else %}
                     <audio controls preload="auto" autoplay>
                         <source src="/{{voice}}" type="audio/wav">
                     </audio>
+                    {% endiff %}
                     <p style="zoom: 0.7;">Took {{gen_time}} seconds to generate {{gen_dur}} seconds of audio (generated {{total_specs}} total spectrograms from {{n_passes}} passes)</p>
                 </div>
                 {% endif %}

@@ -1,4 +1,5 @@
 {
+    "localhost": true,
     "dict_path": "G:/TwiBot/tacotron2/filelists/merged.dict_.txt",
     "tacotron": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",

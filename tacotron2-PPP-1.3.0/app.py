@@ -32,6 +32,8 @@ sample_target_score = 0.8
 sample_multispeaker_mode = "random"
 sample_cat_silence_s = 0.1
 
+use_localhost = t2s.conf['localhost']
+
 # Initialize Flask.
 app = Flask(__name__)
 
@@ -75,6 +77,7 @@ def texttospeech():
         
         # send updated webpage back to client along with page to the file
         return render_template('main.html',
+                                use_localhost=use_localhost,
                                 tacotron_conf=tacotron_conf,
                                 tt_current=tt_current,
                                 tt_len=len(tacotron_conf),
@@ -108,6 +111,7 @@ def texttospeech():
 @app.route('/')
 def show_entries():
     return render_template('main.html',
+                            use_localhost=use_localhost,
                             tacotron_conf=tacotron_conf,
                             tt_current=sample_tacotron,
                             tt_len=len(tacotron_conf),
