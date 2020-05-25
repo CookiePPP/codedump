@@ -102,9 +102,9 @@ def init_distributed(hparams, n_gpus, rank, group_name):
     print("Done initializing distributed")
 
 
-def prepare_dataloaders(hparams):
+def prepare_dataloaders(hparams, saved_lookup):
     # Get data, data loaders and collate function ready
-    speaker_ids = checkpoint['speaker_id_lookup'] if hparams.use_saved_speakers else None
+    speaker_ids = saved_lookup if hparams.use_saved_speakers else None
     trainset = TextMelLoader(hparams.training_files, hparams, shuffle=True,
                            speaker_ids=speaker_ids)
     valset = TextMelLoader(hparams.validation_files, hparams, shuffle=True,
@@ -358,6 +358,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     iteration = 0
     epoch_offset = 0
     _learning_rate = 1e-3
+    saved_lookup = None
     if checkpoint_path is not None:
         if warm_start:
             model, iteration, saved_lookup = warm_start_model(
