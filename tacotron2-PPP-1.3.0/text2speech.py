@@ -104,11 +104,13 @@ class T2S:
         
         # load Tacotron2
         self.tt_current = self.conf['tacotron']['default_model']
+        assert self.tt_current in self.conf['tacotron']['models'].keys(), "Tacotron default model not found in config models"
         tacotron_path = self.conf['tacotron']['models'][self.tt_current]['modelpath'] # get first available Tacotron
         self.tacotron, self.tt_hparams, self.tt_sp_name_lookup, self.tt_sp_id_lookup = self.load_tacotron2(tacotron_path)
         
         # load WaveGlow
         self.wg_current = self.conf['waveglow']['default_model']
+        assert self.wg_current in self.conf['waveglow']['models'].keys(), "WaveGlow default model not found in config models"
         waveglow_path = self.conf['waveglow']['models'][self.wg_current]['modelpath'] # get first available waveglow
         waveglow_confpath = self.conf['waveglow']['models'][self.wg_current]['configpath']
         self.waveglow, self.wg_denoiser, self.wg_train_sigma, self.wg_sp_id_lookup = self.load_waveglow(waveglow_path, waveglow_confpath)
@@ -362,6 +364,12 @@ class T2S:
                     batch_speaker_names = [i for i in speaker_names for _ in range(repeats)][:simultaneous_texts]
                 elif speaker_mode == "random": # random
                     batch_speaker_names = [random.choice(speaker_names),] * simultaneous_texts
+                elif speaker_mode == "cycle_next": # use next speaker for each text input
+                    def shuffle_and_return():
+                        first_speaker = speaker_names[0]
+                        speaker_names.append(speaker_names.pop(0))
+                        return first_speaker
+                    batch_speaker_names = [shuffle_and_return() for i in range(simultaneous_texts)]
                 else:
                     raise NotImplementedError
                 
@@ -572,10 +580,11 @@ class T2S:
             # merge the merged batches into final output
             print(f"Saving output to '{os.path.join(outdir, output_filename)}'... ", end='')
             os.system(f'sox "{os.path.join(outdir, f"{filename_prefix}_concat_*.wav")}" -b 16 "{os.path.join(outdir, output_filename)}"') # merge the merged files into a final output. bit depth of 16 required to go over 4 hour length
+            print("Done.")
             
             # delete all clips other than the merged output
+            print("Cleaning up temp files... ", end="")
             tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}*.wav")) if "output" not in fp]
             _ = [os.remove(fp) for fp in tmp_files]
-            
-            print("Done.")
+            print("Done")
         return output_filename, time_to_gen, audio_seconds_generated, total_specs, n_passes

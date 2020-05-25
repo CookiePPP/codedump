@@ -104,7 +104,9 @@ def init_distributed(hparams, n_gpus, rank, group_name):
 
 def prepare_dataloaders(hparams):
     # Get data, data loaders and collate function ready
-    trainset = TextMelLoader(hparams.training_files, hparams, shuffle=True,)
+    speaker_ids = checkpoint['speaker_id_lookup'] if hparams.use_saved_speakers else None
+    trainset = TextMelLoader(hparams.training_files, hparams, shuffle=True,
+                           speaker_ids=speaker_ids)
     valset = TextMelLoader(hparams.validation_files, hparams, shuffle=True,
                            speaker_ids=trainset.speaker_ids)
     collate_fn = TextMelCollate(hparams.n_frames_per_step)
@@ -151,7 +153,8 @@ def warm_start_force_model(checkpoint_path, model):
     model_dict.update(filtered_dict)
     model.load_state_dict(model_dict)
     iteration = 0
-    return model, iteration
+    saved_lookup = checkpoint_dict['speaker_id_lookup'] if 'speaker_id_lookup' in checkpoint_dict.keys() else None
+    return model, iteration, saved_lookup
 
 
 def warm_start_model(checkpoint_path, model, ignore_layers):
@@ -168,7 +171,8 @@ def warm_start_model(checkpoint_path, model, ignore_layers):
     model.load_state_dict(model_dict)
     iteration = checkpoint_dict['iteration']
     iteration = 0
-    return model, iteration
+    saved_lookup = checkpoint_dict['speaker_id_lookup'] if 'speaker_id_lookup' in checkpoint_dict.keys() else None
+    return model, iteration, saved_lookup
 
 
 def load_checkpoint(checkpoint_path, model, optimizer):
@@ -191,9 +195,10 @@ def load_checkpoint(checkpoint_path, model, optimizer):
         iteration = 0
     else:
         iteration = checkpoint_dict['iteration']
+    saved_lookup = checkpoint_dict['speaker_id_lookup'] if 'speaker_id_lookup' in checkpoint_dict.keys() else None
     print("Loaded checkpoint '{}' from iteration {}" .format(
         checkpoint_path, iteration))
-    return model, optimizer, learning_rate, iteration, best_validation_loss
+    return model, optimizer, learning_rate, iteration, best_validation_loss, saved_lookup
 
 
 def save_checkpoint(model, optimizer, learning_rate, iteration, hparams, best_validation_loss, average_loss, speaker_id_lookup, filepath):
@@ -300,38 +305,40 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     rank (int): rank of current gpu
     hparams (object): comma separated list of "name=value" pairs.
     """
+    # setup distributed
     hparams.n_gpus = n_gpus
     hparams.rank = rank
     if hparams.distributed_run:
         init_distributed(hparams, n_gpus, rank, group_name)
     
+    # reproducablilty stuffs
     torch.manual_seed(hparams.seed)
     torch.cuda.manual_seed(hparams.seed)
     
-    train_loader, valset, collate_fn, train_sampler, trainset = prepare_dataloaders(hparams)
-    speaker_lookup = trainset.speaker_ids
-    
+    # load and/or generate global_mean
     if hparams.drop_frame_rate > 0.:
         if rank != 0: # if global_mean not yet calcuated, wait for main thread to do it
             while not os.path.exists(hparams.global_mean_npy): time.sleep(1)
         global_mean = calculate_global_mean(train_loader, hparams.global_mean_npy, hparams)
         hparams.global_mean = global_mean
     
+    # initialize blank model
     model = load_model(hparams)
     model.eval()
     learning_rate = hparams.learning_rate
     
-    # (optional)
+    # (optional) show the names of each layer in model, mainly makes it easier to copy/paste what you want to adjust
     if hparams.print_layer_names_during_startup:
         print(*[f"Layer{i} = "+str(x[0]) for i,x in enumerate(list(model.named_parameters()))], sep="\n")
     
-    # (optional) Freeze layers by disabled grads
+    # (optional) Freeze layers by disabling grads
     if len(hparams.frozen_modules):
         for layer, params in list(model.named_parameters()):
             if any(layer.startswith(module) for module in hparams.frozen_modules):
                 params.requires_grad = False
                 print(f"Layer: {layer} has been frozen")
     
+    # define optimizer (any params without requires_grad are ignored)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate, weight_decay=hparams.weight_decay)
     #optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate, weight_decay=hparams.weight_decay)
     
@@ -353,19 +360,24 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     _learning_rate = 1e-3
     if checkpoint_path is not None:
         if warm_start:
-            model, iteration = warm_start_model(
+            model, iteration, saved_lookup = warm_start_model(
                 checkpoint_path, model, hparams.ignore_layers)
         elif warm_start_force:
-            model, iteration = warm_start_force_model(
+            model, iteration, saved_lookup = warm_start_force_model(
                 checkpoint_path, model)
         else:
-            model, optimizer, _learning_rate, iteration, best_validation_loss = load_checkpoint(
+            model, optimizer, _learning_rate, iteration, best_validation_loss, saved_lookup = load_checkpoint(
                 checkpoint_path, model, optimizer)
             if hparams.use_saved_learning_rate:
                 learning_rate = _learning_rate
         iteration += 1  # next iteration is iteration + 1
         epoch_offset = max(0, int(iteration / len(train_loader)))
         print('Model Loaded')
+    
+    # define datasets/dataloaders
+    train_loader, valset, collate_fn, train_sampler, trainset = prepare_dataloaders(hparams, saved_lookup)
+    speaker_lookup = trainset.speaker_ids
+    
     # define scheduler
     use_scheduler = 0
     if use_scheduler:

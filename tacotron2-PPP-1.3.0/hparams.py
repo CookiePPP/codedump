@@ -30,6 +30,7 @@ def create_hparams(hparams_string=None, verbose=False):
         ################################
         load_mel_from_disk=True,
         speakerlist='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/speaker_ids.txt',
+        use_saved_speakers=True, # use the speaker lookups saved inside the model instead of generating again
         training_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/mel_train_taca2_merged.txt',
         validation_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/mel_validation_taca2_merged.txt',
         text_cleaners=['basic_cleaners'],
