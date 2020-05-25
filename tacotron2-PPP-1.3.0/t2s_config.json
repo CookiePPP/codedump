@@ -3,14 +3,15 @@
     "tacotron": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
+        "default_model": "Tacotron2 Torchmoji v0.2 (Baseline 41K)",
         "models": {
-            "Tacotron2 Torchmoji v0.2 (Baseline)": {
+            "Tacotron2 Torchmoji v0.2 (Baseline 41K)": {
                 "modelpath": "outdir_truncated1/checkpoint_41000"
             },
-            "Tacotron2 Torchmoji v0.21 (Large DecoderLSTM)": {
+            "Tacotron2 Torchmoji v0.21 (Large DecoderLSTM 30K)": {
                 "modelpath": "outdir_truncated1/checkpoint_71000"
             },
-            "Tacotron2 Torchmoji v0.22 (Large Prenet)": {
+            "Tacotron2 Torchmoji v0.22 (Large Prenet 9K)": {
                 "modelpath": "outdir_truncated1/checkpoint_9000"
             }
         }
@@ -18,20 +19,21 @@
     "waveglow": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
+        "default_model": "MiniWaveGlow V2 (GT, 16 Flow, n_group 120 282K)",
         "models": {
-            "MiniWaveGlow V2 (GT, 16 Flow, n_group 120)": {
+            "MiniWaveGlow V2 (GT, 16 Flow, n_group 120 282K)": {
                 "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
                 "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
             },
-            "WaveGlow V5 (Postnet, 12 Flow, n_group 24)": {
+            "WaveGlow V5 (Postnet, 12 Flow, n_group 24 73K)": {
                 "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing5/best_val_model",
                 "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing5/config.json"
             },
-            "LargeWaveGlow V1 (GT, 24 Flow, n_group 10)": {
-                "modelpath": "H:\TTCheckpoints\waveglow\outdir_EfficientLarge/best_model",
+            "LargeWaveGlow V1 (GT, 24 Flow, n_group 10 206K)": {
+                "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientLarge/best_model",
                 "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientLarge/config.json"
             },
-            "LargeWaveGlow V3.5 (GT, 48 Flow, n_group 24)": {
+            "LargeWaveGlow V3.5 (GT, 48 Flow, n_group 24 190K)": {
                 "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",
                 "configpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/config.json"
             }

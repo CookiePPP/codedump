@@ -103,15 +103,15 @@ class T2S:
             self.conf = json.load(f)
         
         # load Tacotron2
-        tacotron_path = list(self.conf['tacotron']['models'].values())[0]['modelpath'] # get first available Tacotron
+        self.tt_current = self.conf['tacotron']['default_model']
+        tacotron_path = self.conf['tacotron']['models'][self.tt_current]['modelpath'] # get first available Tacotron
         self.tacotron, self.tt_hparams, self.tt_sp_name_lookup, self.tt_sp_id_lookup = self.load_tacotron2(tacotron_path)
-        self.tt_current = list(self.conf['tacotron']['models'].keys())[0]
         
         # load WaveGlow
-        waveglow_path = list(self.conf['waveglow']['models'].values())[0]['modelpath'] # get first available waveglow
-        waveglow_confpath = list(self.conf['waveglow']['models'].values())[0]['configpath']
+        self.wg_current = self.conf['waveglow']['default_model']
+        waveglow_path = self.conf['waveglow']['models'][self.wg_current]['modelpath'] # get first available waveglow
+        waveglow_confpath = self.conf['waveglow']['models'][self.wg_current]['configpath']
         self.waveglow, self.wg_denoiser, self.wg_train_sigma, self.wg_sp_id_lookup = self.load_waveglow(waveglow_path, waveglow_confpath)
-        self.wg_current = list(self.conf['waveglow']['models'].keys())[0]
         
         # load torchMoji
         if self.tt_hparams.torchMoji_linear: # if Tacotron includes a torchMoji layer
@@ -193,11 +193,8 @@ class T2S:
             data = f.read()
         config = json.loads(data)
         train_config = config["train_config"]
-        global data_config
         data_config = config["data_config"]
-        global dist_config
         dist_config = config["dist_config"]
-        global waveglow_config
         waveglow_config = {
             **config["waveglow_config"], 
             'win_length': data_config['win_length'],
@@ -236,7 +233,7 @@ class T2S:
     
     
     def update_wg(self, waveglow_name):
-        self.waveglow, self.wg_denoiser, self.wg_sp_id_lookup = self.load_waveglow(self.conf['waveglow']['models'][waveglow_name]['modelpath'])
+        self.waveglow, self.wg_denoiser, self.wg_train_sigma, self.wg_sp_id_lookup = self.load_waveglow(self.conf['waveglow']['models'][waveglow_name]['modelpath'], self.conf['waveglow']['models'][waveglow_name]['configpath'])
         self.wg_current = waveglow_name
     
     def load_tacotron2(self, tacotron_path):
@@ -340,6 +337,8 @@ class T2S:
             
             continue_from = 0
             counter = 0
+            total_specs = 0
+            n_passes = 0
             text_batch_in_progress = []
             for text_index, text in enumerate(texts):
                 if text_index < continue_from: print(f"Skipping {text_index}.\t",end=""); counter+=1; continue
@@ -349,6 +348,7 @@ class T2S:
                 if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (len(texts)-1)): # if text batch ready or final input
                     text_batch = text_batch_in_progress
                     text_batch_in_progress = []
+                    n_passes+=1 # metric for html
                 else:
                     continue # if batch not ready, add another text
                 
@@ -445,6 +445,9 @@ class T2S:
                         if status_updates: print("Running Tacotron2... ", end='')
                         mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = self.tacotron.inference(sequence, tacotron_speaker_ids, style_input=style_input, style_mode=style_mode, text_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0))
                         
+                        # metric for html side
+                        total_specs+=mel_batch_outputs.shape[0]
+                        
                         # get metrics for each item
                         gate_batch_outputs[:,:10] = 0 # ignore gate predictions for the first bit
                         output_lengths = gate_batch_outputs.argmax(dim=1)+gate_delay
@@ -487,7 +490,7 @@ class T2S:
                                     raise StopIteration
                         
                         if np.amin(tries) < (max_attempts-1):
-                            print('Acceptable alignment/diagonality not reached. Retrying.')
+                            print('Target score not reached. Retrying.')
                         elif np.amin(best_score) < absolutely_required_score:
                             print('Score less than absolutely required score. Retrying extra.')
                 except StopIteration:
@@ -575,4 +578,4 @@ class T2S:
             _ = [os.remove(fp) for fp in tmp_files]
             
             print("Done.")
-        return output_filename, time_to_gen, audio_seconds_generated
+        return output_filename, time_to_gen, audio_seconds_generated, total_specs, n_passes

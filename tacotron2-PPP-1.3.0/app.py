@@ -1,4 +1,4 @@
-from flask import Flask,render_template, Response, request
+from flask import Flask,render_template, Response, request, send_from_directory
 import sys
 # Tornado web server
 from tornado.wsgi import WSGIContainer
@@ -15,8 +15,8 @@ waveglow_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"
 infer_dir = "server_infer"
 
 # default html config
-sample_tacotron = "Tacotron2 Torchmoji v1.1 (Baseline)"
-sample_waveglow = "MiniWaveGlow V2 (GT, 16 Flow, n_group 120)"
+sample_tacotron = t2s.conf['tacotron']['default_model']
+sample_waveglow = t2s.conf['waveglow']['default_model']
 sample_current_text = "" # default text entered
 sample_background_text = "Enter text." # this is the faded out text when nothing has been entered
 sample_speaker = ["(Show) My Little Pony_Twilight",]
@@ -29,7 +29,7 @@ sample_batch_size=256
 sample_dyna_max_duration_s = 0.3
 sample_use_arpabet = "on"
 sample_target_score = 0.8
-sample_multispeaker_mode = "interleaved"
+sample_multispeaker_mode = "random"
 sample_cat_silence_s = 0.1
 
 # Initialize Flask.
@@ -68,7 +68,7 @@ def texttospeech():
             t2s.update_wg(wg_current)
         
         # generate an audio file from the inputs
-        filename, gen_time, gen_dur = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
+        filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
         print(f"GENERATED {filename}")
         
         # send updated webpage back to client along with page to the file
@@ -97,6 +97,8 @@ def texttospeech():
                                 target_score=target_score,
                                 gen_time=round(gen_time,2),
                                 gen_dur=round(gen_dur,2),
+                                total_specs=total_specs,
+                                n_passes=n_passes,
                                 multispeaker_mode=multispeaker_mode,
                                 cat_silence_s=cat_silence_s,)
 
@@ -128,12 +130,15 @@ def show_entries():
                             target_score=sample_target_score,
                             gen_time="",
                             gen_dur="",
+                            total_specs="",
+                            n_passes="",
                             multispeaker_mode=sample_multispeaker_mode,
                             cat_silence_s=sample_cat_silence_s,)
 
 #Route to stream music
 @app.route('/<voice>', methods=['GET'])
 def streammp3(voice):
+    print("AUDIO_REQUEST: ", request)
     def generate():
         with open(os.path.join(infer_dir, voice), "rb") as fwav:# open audio_path
             data = fwav.read(1024)
@@ -141,7 +146,11 @@ def streammp3(voice):
                 yield data
                 data = fwav.read(1024)
     
-    return Response(generate(), mimetype="audio/mp3")
+    stream_audio = False
+    if stream_audio: # don't have seeking working atm
+        return Response(generate(), mimetype="audio/wav")
+    else:
+        return send_from_directory(infer_dir, voice)
 
 #launch a Tornado server with HTTPServer.
 if __name__ == "__main__":

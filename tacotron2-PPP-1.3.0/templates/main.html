@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"
         integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
     <title>The Text to Speech App</title>
-    <link rel="shortcut icon" href="/wavs/favicon.ico">
+    <link rel="shortcut icon" href="favicon.ico">
     <style>
     .collapsible {
       background-color: #777;
@@ -163,14 +163,12 @@
             <div class="media">
                 <div class="media-body pull-right">
                     <p class="lead"> Result </p>
-
                     <audio controls preload="auto" autoplay>
-                        <source src="http://localhost:5000/{{voice}}" type="audio/mp3">
+                        <source src="http://localhost:5000/{{voice}}" type="audio/wav">
                     </audio>
-                    <p style="zoom: 0.7;">Took {{gen_time}} seconds to generate {{gen_dur}} seconds of audio</p>
+                    <p style="zoom: 0.7;">Took {{gen_time}} seconds to generate {{gen_dur}} seconds of audio (generated {{total_specs}} total spectrograms from {{n_passes}} passes)</p>
                 </div>
                 {% endif %}
-
             </div>
         </div>
         <script>
