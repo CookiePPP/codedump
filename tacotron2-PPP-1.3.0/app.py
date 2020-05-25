@@ -42,7 +42,7 @@ def texttospeech():
         # grab all the form inputs
         result = request.form
         
-        assert len(result.get('input_text')), "No input_text found in request form!"
+        assert result.get('input_text'), "No input_text found in request form!"
         
         speaker = result.getlist('input_speaker')
         text = result.get('input_text')
