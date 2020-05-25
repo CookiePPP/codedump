@@ -42,12 +42,14 @@ def texttospeech():
         # grab all the form inputs
         result = request.form
         
+        assert len(result.get('input_text')), "No input_text found in request form!"
+        
         speaker = result.getlist('input_speaker')
         text = result.get('input_text')
         style_mode = result.get('input_style_mode')
         textseg_mode = result.get('input_textseg_mode')
         batch_mode = result.get('input_batch_mode')
-        max_attempts = int(result.get('input_max_attempts'))
+        max_attempts = int(result.get('input_max_attempts')) if result.get('input_max_attempts') else 256
         max_duration_s = float(result.get('input_max_duration_s'))
         batch_size = int(result.get('input_batch_size'))
         dyna_max_duration_s = float(result.get('input_dyna_max_duration_s'))
