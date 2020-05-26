@@ -13,9 +13,12 @@ from text import text_to_sequence
 from denoiser import Denoiser
 from utils import load_filepaths_and_text
 import json
+import re
 import difflib
 from glob import glob
 from unidecode import unidecode
+import nltk # sentence spliting
+from nltk import sent_tokenize
 
 def get_mask_from_lengths(lengths, max_len=None):
     if not max_len:
@@ -73,6 +76,8 @@ def chunks(lst, n):
 
 
 def parse_text_into_quotes(texts):
+    """Swap speaker at every quote mark. Also split longer phrases at periods.
+    If text previously inside a quote is too long and split, then each split segment will have quotes around it (for information later on rather than accuracy to the original text)."""
     max_text_segment_length = 120
     quo ='"' # nested quotes in list comprehension are hard to work with
     texts = [f'"{text.replace(quo,"").strip()}"' if i%2 else text.replace(quo,"").strip() for i, text in enumerate(unidecode(texts).split('"'))]
@@ -86,7 +91,7 @@ def parse_text_into_quotes(texts):
             .replace("  "," ")\
             .replace("> --------------------------------------------------------------------------","")
         if len(text) > max_text_segment_length:
-            for seg in [x.strip() for x in text.split(".") if len(x.strip()) if x is not '"']: 
+            for seg in [x.strip() for x in sent_tokenize(text) if len(x.strip()) and x is not '"']: 
                 if '"' in text:
                     if seg[0] != '"': seg='"'+seg
                     if seg[-1] != '"': seg+='"'
@@ -127,6 +132,9 @@ class T2S:
         # load arpabet/pronounciation dictionary
         dict_path = self.conf['dict_path']
         self.load_arpabet_dict(dict_path)
+        
+        # download nltk package for splitting text into sentences
+        nltk.download('punkt')
         
         print("T2S Initialized and Ready!")
     
@@ -306,7 +314,7 @@ class T2S:
             elif textseg_mode == 'segment_by_line':
                 texts = text.split("\n")
             elif textseg_mode == 'segment_by_sentence':
-                texts = text.split(". ") # temp, nltk has a good version of this so no point making my own.
+                texts = [x.strip() for x in sent_tokenize(text) if len(x.strip())]# temp, nltk has a good version of this so no point making my own.
             elif textseg_mode == 'segment_by_sentencequote':
                 texts = parse_text_into_quotes(text)
             else:
