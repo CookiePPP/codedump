@@ -78,7 +78,7 @@
                     <div class="form-group content" style="box-shadow: #777777 0px 0px 0px 3px inset;">
                         <div class="form-group" style="margin-top: 1em;">
                             <label for="select">Use Pronounciation Dictionary (ARPAbet)</label>
-                            <input style="width: 3em;" class="form-control" type={{"checkbox" if use_arpabet else ""}} name="input_use_arpabet" checked="">
+                            <input style="width: 3em;" class="form-control" type="checkbox" {{"checked" if use_arpabet else ""}} name="input_use_arpabet" >
                         </div>
                         <div class="form-group">
                             <label for="select">Multispeaker Mode</label>
@@ -112,8 +112,8 @@
                             <input style="width: -webkit-fill-available;" class="form-control" value="{{max_attempts}}" type="number" min="1" step="1" name="input_max_attempts">
                         </div>
                         <div class="form-group">
-                            <label for="select">Target Score</label>
-                            <label style="zoom: 0.7;">(Model will stop making attempts once Target Score is reached. This is quite hard to describe so it's probably best to just max it out and pick the best of "Max Attempts" instead of early stopping.)</label>
+                            <label for="select">Target Alignment Score</label>
+                            <label style="zoom: 0.7;">(Model will stop making attempts once Target Alignment Score is reached. This is quite hard to describe so it's probably best to just max it out and pick the best of "Max Attempts" instead of early stopping.)</label>
                             <input style="width: -webkit-fill-available;padding-right: 0px;padding-left: 0px;margin-right: 2em;margin-left: 2em;" class="form-control" value={{target_score}} type="range" name="input_target_score" min="-0.2" max="0.8" step="0.01">
                         </div>
                         <div class="form-group">
@@ -142,6 +142,7 @@
                     </div>
                 <div class="form-group">
                     <label for="select">Speaker(s)</label>
+                    <label style="zoom: 0.6;">(You can select more than one)</label>
                     <select name="input_speaker" class="form-control" style="height: 15em; resize: vertical;" multiple>
                         {%for i in range(0, sp_len)%}
                         <option value='{{speakers_available[i]}}' {{ 'selected' if speakers_available[i] in speaker else '' }}>{{speakers_available_short[i]}}</option>
