@@ -12,8 +12,8 @@
             "Tacotron2 Torchmoji v0.21 (Large DecoderLSTM 71K)": {
                 "modelpath": "outdir_truncated1/checkpoint_71000"
             },
-            "Tacotron2 Torchmoji v0.22 (Large Prenet 12K)": {
-                "modelpath": "outdir_truncated1/checkpoint_12000"
+            "Tacotron2 Torchmoji v0.22 (Large Prenet 40K)": {
+                "modelpath": "outdir_truncated1/checkpoint_45000"
             }
         }
     },

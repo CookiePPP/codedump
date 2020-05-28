@@ -1,6 +1,6 @@
 current_iteration = iteration
 decay_start = 180000
-A_ = 20e-5
+A_ = 10e-5
 B_ = 30000
 C_ = 0e-5
 min_learning_rate = 10e-5

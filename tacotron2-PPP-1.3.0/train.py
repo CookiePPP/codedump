@@ -315,13 +315,6 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     torch.manual_seed(hparams.seed)
     torch.cuda.manual_seed(hparams.seed)
     
-    # load and/or generate global_mean
-    if hparams.drop_frame_rate > 0.:
-        if rank != 0: # if global_mean not yet calcuated, wait for main thread to do it
-            while not os.path.exists(hparams.global_mean_npy): time.sleep(1)
-        global_mean = calculate_global_mean(train_loader, hparams.global_mean_npy, hparams)
-        hparams.global_mean = global_mean
-    
     # initialize blank model
     model = load_model(hparams)
     model.eval()
@@ -329,7 +322,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     
     # (optional) show the names of each layer in model, mainly makes it easier to copy/paste what you want to adjust
     if hparams.print_layer_names_during_startup:
-        print(*[f"Layer{i} = "+str(x[0]) for i,x in enumerate(list(model.named_parameters()))], sep="\n")
+        print(*[f"Layer{i} = "+str(x[0])+" "+str(x[1].shape) for i,x in enumerate(list(model.named_parameters()))], sep="\n")
     
     # (optional) Freeze layers by disabling grads
     if len(hparams.frozen_modules):
@@ -372,12 +365,20 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
             if hparams.use_saved_learning_rate:
                 learning_rate = _learning_rate
         iteration += 1  # next iteration is iteration + 1
-        epoch_offset = max(0, int(iteration / len(train_loader)))
         print('Model Loaded')
     
     # define datasets/dataloaders
     train_loader, valset, collate_fn, train_sampler, trainset = prepare_dataloaders(hparams, saved_lookup)
+    epoch_offset = max(0, int(iteration / len(train_loader)))
     speaker_lookup = trainset.speaker_ids
+    
+    # load and/or generate global_mean
+    if hparams.drop_frame_rate > 0.:
+        if rank != 0: # if global_mean not yet calcuated, wait for main thread to do it
+            while not os.path.exists(hparams.global_mean_npy): time.sleep(1)
+        global_mean = calculate_global_mean(train_loader, hparams.global_mean_npy, hparams)
+        hparams.global_mean = global_mean
+        model.global_mean = global_mean
     
     # define scheduler
     use_scheduler = 0

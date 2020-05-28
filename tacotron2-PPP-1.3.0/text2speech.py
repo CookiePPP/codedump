@@ -75,6 +75,7 @@ def chunks(lst, n):
         yield lst[i:i + n]
 
 
+# TODO, invert this guy. Instead of splitting chunks of text that go over a limit. Split ALL the text at the start, and keep merging the text into chunks that are as large as possible!
 def parse_text_into_quotes(texts):
     """Swap speaker at every quote mark. Also split longer phrases at periods.
     If text previously inside a quote is too long and split, then each split segment will have quotes around it (for information later on rather than accuracy to the original text)."""
@@ -358,7 +359,6 @@ class T2S:
                 if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (len(texts)-1)): # if text batch ready or final input
                     text_batch = text_batch_in_progress
                     text_batch_in_progress = []
-                    n_passes+=1 # metric for html
                 else:
                     continue # if batch not ready, add another text
                 
@@ -462,6 +462,7 @@ class T2S:
                         mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = self.tacotron.inference(sequence, tacotron_speaker_ids, style_input=style_input, style_mode=style_mode, text_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0))
                         
                         # metric for html side
+                        n_passes+=1 # metric for html
                         total_specs+=mel_batch_outputs.shape[0]
                         
                         # get metrics for each item
@@ -545,7 +546,7 @@ class T2S:
                     alignments = alignments_batch.split(1, dim=0)[j][:,:spec_end,:text_lengths[j]]
                     
                     # save audio
-                    filename = f"{filename_prefix}_{counter//300:02}_{counter:05}.wav"
+                    filename = f"{filename_prefix}_{counter//300:04}_{counter:06}.wav"
                     save_path = os.path.join(outdir, filename)
                     
                     # add silence to clips (ignore last clip)
@@ -574,25 +575,51 @@ class T2S:
                     print(f"Took {time_to_gen}s to generate {audio_seconds_generated}s of audio. (best of {tries.sum().astype('int')} tries)")
             
             # merge clips
-            output_filename = f"{filename_prefix}_output.wav"
+            output_filename = f"{filename_prefix}_output"
             
             # get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
             n_audio_batches = -(-len( glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) ) // 300)
             
+            #
+            # Everything below here is in need of a rewrite to remove temp files as soon as they're not needed.
+            #
+            
             # merge batches of 300 files together
             for i in range(n_audio_batches):
                 print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
-                os.system(f'sox {os.path.join(outdir, f"{filename_prefix}_{i:02}_*.wav")} -b 16 {os.path.join(outdir, f"{filename_prefix}_concat_{i:02}.wav")}')
+                os.system(f'sox {os.path.join(outdir, f"{filename_prefix}_{i:04}_*.wav")} -b 16 {os.path.join(outdir, f"{filename_prefix}_concat_{i:04}.wav")}')
                 print("Done")
             
-            # merge the merged batches into final output
-            print(f"Saving output to '{os.path.join(outdir, output_filename)}'... ", end='')
-            os.system(f'sox "{os.path.join(outdir, f"{filename_prefix}_concat_*.wav")}" -b 16 "{os.path.join(outdir, output_filename)}"') # merge the merged files into a final output. bit depth of 16 required to go over 4 hour length
-            print("Done.")
+            # merge the merged batches into final output(s)
+            # WAV files cannot go above 4GB in size, therefore output may be split into pieces
+            print("Merging remaining files...")
+            running_fsize = 0
+            fpaths = []
+            out_count = 0
+            merged_files = glob(os.path.join(outdir, f"{filename_prefix}_concat_*.wav"))
+            for i, fpath in enumerate(merged_files):
+                fsize = os.stat(fpath).st_size
+                running_fsize += fsize
+                fpaths += [fpath,]
+                if running_fsize/(1024**3) > 2.0 or i >= (len(merged_files)-1) or (len(fpaths) > 300): # if total size of fpaths is > 2GB or at final file
+                    print("running_fsize =", running_fsize/(1024**3))
+                    fpath_str = '"'+'" "'.join(fpaths)+'"' # chain together fpaths in string for SoX input
+                    out_name = f"{output_filename}_{out_count:02}.wav"
+                    out_path = os.path.join(outdir, out_name)
+                    os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
+                    
+                    if running_fsize >= (os.stat(out_path).st_size - 1024):
+                        print("Cleaning up merged temp files... ", end="")
+                        _ = [os.remove(fp) for fp in fpaths]
+                        print("Done")
+                    running_fsize = 0
+                    out_count+=1
+                    fpaths = []
+            print("Merging Done")
             
-            # delete all clips other than the merged output
-            print("Cleaning up temp files... ", end="")
-            tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}*.wav")) if "output" not in fp]
+            print("Cleaning up remaining temp files... ", end="")
+            tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) if "output" not in fp]
             _ = [os.remove(fp) for fp in tmp_files]
             print("Done")
-        return output_filename, time_to_gen, audio_seconds_generated, total_specs, n_passes
+            
+        return out_name, time_to_gen, audio_seconds_generated, total_specs, n_passes
