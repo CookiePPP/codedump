@@ -66,7 +66,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.truncated_length = hparams.truncated_length # frames
         
         # -------------- PREDICT LENGTH (TBPTT) --------------
-        if TBPTT:
+        if hparams.use_TBPTT:
             self.audio_lengths = torch.tensor([self.get_mel(x[0]).shape[1] for x in self.audiopaths_and_text]) # get the length of every file (the long way)
         else:
             self.audio_lengths = torch.tensor([self.truncated_length-1 for x in self.audiopaths_and_text]) # use dummy lengths

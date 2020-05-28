@@ -321,6 +321,9 @@ class T2S:
             else:
                 raise NotImplementedError(f"textseg_mode of {textseg_mode} is invalid.")
             
+            # cleanup for empty inputs.
+            texts = [x.strip() for x in texts if len(x.strip())]
+            
             total_len = len(texts)
             
             # update Tacotron stopping params

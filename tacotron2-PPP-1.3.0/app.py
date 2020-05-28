@@ -71,6 +71,9 @@ def texttospeech():
         if t2s.wg_current != wg_current:
             t2s.update_wg(wg_current)
         
+        # CRLF to LF
+        text = text.replace('\r\n','\n')
+        
         # generate an audio file from the inputs
         filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
         print(f"GENERATED {filename}")

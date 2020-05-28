@@ -170,6 +170,7 @@ def create_hparams(hparams_string=None, verbose=False):
         grad_clip_thresh=1.0,
         batch_size=32,
         val_batch_size=32, # for more precise comparisons between models, constant batch_size is useful
+        use_TBPTT=True,
         truncated_length=1000, # max mel length till truncation.
         mask_padding=True,#mask values by setting them to the same values in target and predicted
         masked_select=True,#mask values by removing them from the calculation
