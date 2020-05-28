@@ -11,7 +11,7 @@ def create_hparams(hparams_string=None, verbose=False):
         ################################
         epochs=1000,
         iters_per_checkpoint=5000,
-        iters_per_validation=1000,
+        iters_per_validation=2000,
         seed=1234,
         dynamic_loss_scaling=True,
         fp16_run=True,
@@ -171,7 +171,8 @@ def create_hparams(hparams_string=None, verbose=False):
         batch_size=32,
         val_batch_size=32, # for more precise comparisons between models, constant batch_size is useful
         truncated_length=1000, # max mel length till truncation.
-        mask_padding=True,
+        mask_padding=True,#mask values by setting them to the same values in target and predicted
+        masked_select=True,#mask values by removing them from the calculation
         
         # (DFR) Drop Frame Rate
         global_mean_npy='global_mean.npy',

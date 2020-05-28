@@ -5,7 +5,7 @@ import torch
 
 def get_mask_from_lengths(lengths, max_len=None):
     if not max_len:
-        max_len = torch.max(lengths).item()
+        max_len = int(torch.max(lengths).item())
     ids = torch.arange(0, max_len, out=torch.cuda.LongTensor(max_len))
     mask = (ids < lengths.unsqueeze(1))
     return mask
@@ -13,7 +13,7 @@ def get_mask_from_lengths(lengths, max_len=None):
 
 def get_drop_frame_mask_from_lengths(lengths, drop_frame_rate):
     batch_size = lengths.size(0)
-    max_len = torch.max(lengths).item()
+    max_len = int(torch.max(lengths).item())
     mask = get_mask_from_lengths(lengths)
     drop_mask = torch.empty([batch_size, max_len], device=lengths.device).uniform_(0., 1.) < drop_frame_rate
     drop_mask = drop_mask * mask
