@@ -359,11 +359,19 @@ class T2S:
                 
                 # setup the text batches
                 text_batch_in_progress.append(text)
-                if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (len(texts)-1)): # if text batch ready or final input
+                if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (total_len-1)): # if text batch ready or final input
                     text_batch = text_batch_in_progress
                     text_batch_in_progress = []
                 else:
                     continue # if batch not ready, add another text
+                
+                if self.conf['show_inference_progress']:
+                    time_elapsed = time.time()-start_time
+                    time_per_clip = time_elapsed/(text_index+1)
+                    remaining_files = (total_len-(text_index+1))
+                    eta_finish = remaining_files/time_per_clip
+                    print(f"{text_index}/{total_len}, {eta_finish}mins remaining.")
+                    del time_per_clip, eta_finish, remaining_files, time_elapsed
                 
                 self.tacotron.decoder.max_decoder_steps = int(min(max([len(t) for t in text_batch]) * float(dyna_max_duration_s)*frames_per_second, float(max_duration_s)*frames_per_second))
                 
@@ -580,6 +588,8 @@ class T2S:
                     audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
                     time_to_gen = round(time.time()-start_time,3)
                     print(f"Took {time_to_gen}s to generate {audio_seconds_generated}s of audio. (best of {tries.sum().astype('int')} tries)")
+                
+                print("\n") # seperate each pass
             
             # merge clips
             output_filename = f"{filename_prefix}_output"
