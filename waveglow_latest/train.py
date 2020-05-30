@@ -167,11 +167,6 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
                 mel = np.load(melpath) # load mel from file into numpy arr
                 mel = torch.from_numpy(mel).unsqueeze(0).cuda() # from numpy arr to tensor on GPU
             
-#            if data_config['preempthasis']: # preempthasis
-#                audio = audio.numpy()
-#                audio = np.append(audio[0], audio[1:] - float(data_config['preempthasis']) * audio[:-1]) # preempthasis
-#                audio = torch.from_numpy(audio)
-            
             if hasattr(model, 'multispeaker') and model.multispeaker == True:
                 assert len(remaining), f"Speaker ID missing while multispeaker == True.\nLine: {i}\n'{'|'.join([autiopath, melpath])}'"
                 speaker_id = remaining[0]
@@ -278,15 +273,20 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     
     global WaveGlow
     global WaveGlowLoss
-    if waveglow_config["yoyo"]: # efficient_mode # TODO: Add to Config File
-        from efficient_model import WaveGlow
+    
+    ax = True # this is **really** bad coding practice :D
+    if ax:
+        from efficient_model_ax import WaveGlow
         from efficient_loss import WaveGlowLoss
     else:
-        from glow import WaveGlow, WaveGlowLoss
+        if waveglow_config["yoyo"]: # efficient_mode # TODO: Add to Config File
+            from efficient_model import WaveGlow
+            from efficient_loss import WaveGlowLoss
+        else:
+            from glow import WaveGlow, WaveGlowLoss
     
     criterion = WaveGlowLoss(sigma)
     model = WaveGlow(**waveglow_config).cuda()
-    
     #=====START: ADDED FOR DISTRIBUTED======
     if num_gpus > 1:
         model = apply_gradient_allreduce(model)
@@ -306,7 +306,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                  mel_fmin=data_config['mel_fmin'], mel_fmax=data_config['mel_fmax'])
     
     optimizer = "Adam"
-    optimizer_fused = True # use Apex fused optimizer, should be identical to normal but slightly faster
+    optimizer_fused = False # use Apex fused optimizer, should be identical to normal but slightly faster
     if optimizer_fused:
         from apex import optimizers as apexopt
         if optimizer == "Adam":
@@ -317,7 +317,11 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
         if optimizer == "Adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         elif optimizer == "LAMB":
-            raise# PyTorch doesn't currently include LAMB optimizer.
+            from lamb import Lamb as optLAMB
+            optimizer = optLAMB(model.parameters(), lr=learning_rate)
+            #import torch_optimizer as optim
+            #optimizer = optim.Lamb(model.parameters(), lr=learning_rate)
+            #raise# PyTorch doesn't currently include LAMB optimizer.
     
     if fp16_run:
         global amp
@@ -339,7 +343,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     iteration = 0
     if checkpoint_path != "":
         
-        warm_start = 0 # WARM START THE MODEL AND RESET ANY INVALID LAYERS
+        warm_start = 1 # WARM START THE MODEL AND RESET ANY INVALID LAYERS
         
         model, optimizer, iteration, scheduler = load_checkpoint(checkpoint_path, model,
                                                       optimizer, scheduler, fp16_run, warm_start=warm_start)
@@ -551,7 +555,8 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                             MSE, MAE = validate(model, loader_STFT, STFT, logger, iteration, data_config['validation_files'], speaker_lookup, sigma, output_directory, data_config)
                             if scheduler:
                                 MSE = torch.tensor(MSE, device='cuda')
-                                broadcast(MSE, 0)
+                                if num_gpus > 1:
+                                    broadcast(MSE, 0)
                                 scheduler.step(MSE.item())
                                 if MSE < best_MSE:
                                     checkpoint_path = os.path.join(output_directory, "best_val_model")

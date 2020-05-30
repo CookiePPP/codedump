@@ -105,9 +105,9 @@ def init_distributed(hparams, n_gpus, rank, group_name):
 def prepare_dataloaders(hparams, saved_lookup):
     # Get data, data loaders and collate function ready
     speaker_ids = saved_lookup if hparams.use_saved_speakers else None
-    trainset = TextMelLoader(hparams.training_files, hparams, shuffle=True,
+    trainset = TextMelLoader(hparams.training_files, hparams, shuffle=False,
                            speaker_ids=speaker_ids)
-    valset = TextMelLoader(hparams.validation_files, hparams, shuffle=True,
+    valset = TextMelLoader(hparams.validation_files, hparams, shuffle=False,
                            speaker_ids=trainset.speaker_ids)
     collate_fn = TextMelCollate(hparams.n_frames_per_step)
 

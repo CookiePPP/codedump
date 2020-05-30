@@ -26,9 +26,9 @@ sample_batch_mode="nochange"
 sample_max_attempts=256
 sample_max_duration_s=12
 sample_batch_size=256
-sample_dyna_max_duration_s = 0.3
+sample_dyna_max_duration_s = 0.10
 sample_use_arpabet = "on"
-sample_target_score = 0.8
+sample_target_score = 0.75
 sample_multispeaker_mode = "random"
 sample_cat_silence_s = 0.1
 
@@ -76,7 +76,7 @@ def texttospeech():
         
         # generate an audio file from the inputs
         filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
-        print(f"GENERATED {filename}")
+        print(f"GENERATED {filename}\n\n")
         
         # send updated webpage back to client along with page to the file
         return render_template('main.html',

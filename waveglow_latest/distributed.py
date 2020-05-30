@@ -100,7 +100,7 @@ def apply_gradient_allreduce(module):
     for p in module.state_dict().values():
         if not torch.is_tensor(p):
             continue
-        dist.broadcast(p, 0)
+        dist.broadcast(p.contiguous(), 0)
 
     def allreduce_params():
         if(module.needs_reduction):

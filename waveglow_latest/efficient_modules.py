@@ -56,7 +56,7 @@ class WN(nn.Module):
     """
     def __init__(self, in_channels, aux_channels, dilation_channels=256,
                  residual_channels=256, skip_channels=256, n_layers=8,
-                 radix=3, bias=False, zero_init=True):
+                 radix=3, bias=False, speaker_embed_dim=0, zero_init=True):
         super().__init__()
         dilations = 2 ** torch.arange(n_layers)
         self.dilations = dilations.tolist()
@@ -95,7 +95,7 @@ class WN(nn.Module):
             if bias:
                 self.end.bias.data.zero_()
     
-    def forward(self, audio, spect):
+    def forward(self, audio, spect, speaker_ids):
         audio = self.start(audio)
         
         cum_skip = None

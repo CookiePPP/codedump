@@ -110,7 +110,7 @@ class WaveGlow(nn.Module):
         #  Upsample spectrogram to size of audio
         if self.upsample_first:
             cond = self._upsample_mels(cond, audio.size(2)) # [B, mels, T//n_group]
-            
+        
         #assert audio.size(2) <= cond.size(2)
         #cond = cond[..., :audio.size(2)]
         

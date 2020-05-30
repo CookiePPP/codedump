@@ -332,7 +332,7 @@ class T2S:
             self.tacotron.decoder.max_decoder_steps = int(min(max([len(t) for t in texts]) * float(dyna_max_duration_s)*frames_per_second, float(max_duration_s)*frames_per_second))
             self.tacotron.decoder.gate_threshold = float(gate_threshold)
             
-            # find closest valid name
+            # find closest valid name(s)
             speaker_names = self.get_closest_names(speaker_names)
             
             # pick how the batch will be handled
@@ -427,6 +427,10 @@ class T2S:
                     raise NotImplementedError
                 else:
                     raise NotImplementedError
+                
+                if style_input.size(0) < (simultaneous_texts*batch_size_per_text):
+                    diff = -(-(simultaneous_texts*batch_size_per_text) // style_input.size(0))
+                    style_input = style_input.repeat(diff, 1)[:simultaneous_texts*batch_size_per_text]
                 
                 # check punctuation and add '.' if missing
                 valid_last_char = '-,.?!;:' # valid final characters in texts
