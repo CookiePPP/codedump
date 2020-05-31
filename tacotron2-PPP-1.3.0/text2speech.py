@@ -132,6 +132,13 @@ def parse_text_into_segments(texts, split_at_quotes=True, target_segment_length=
     return texts_output
 
 
+def get_first_over_thresh(x, threshold=0.5):
+    """Takes [B, T] and outputs first T over threshold for each B (output.shape = [B])."""
+    x[:,x.size(1)-1] = threshold # set last to threshold just incase the output didn't finish generating.
+    x[x>threshold] = threshold
+    return (x.size(1)-1)-(x.flip(dims=(1,)).argmax(dim=1))
+
+
 class T2S:
     def __init__(self):
         # load T2S config
@@ -322,16 +329,16 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=6, gate_threshold=0.5, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, absolute_maximum_tries=4096, absolutely_required_score=-1e3):    
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=4, gate_threshold=0.1, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, absolute_maximum_tries=4096, absolutely_required_score=-1e3):
         with torch.no_grad():
             # time to gen
             audio_len = 0
             start_time = time.time()
             
             # Score Parameters
-            diagonality_weighting = 0.5 # 'stutter factor', a penalty for clips where the model jumps back and forwards in the sentence.
+            diagonality_weighting = 0.5 # 'stutter factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
             max_focus_weighting = 1.0   # 'stuck factor', a penalty for clips that spend execisve time on the same letter.
-            min_focus_weighting = 1.0   # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
+            min_focus_weighting = 0.25  # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
             avg_focus_weighting = 1.0   # 'skip factor', a penalty for skipping very large parts of the input text
             
             # add a filename prefix to keep multiple requests seperate
@@ -504,8 +511,8 @@ class T2S:
                         total_specs+=mel_batch_outputs.shape[0]
                         
                         # get metrics for each item
-                        gate_batch_outputs[:,:10] = 0 # ignore gate predictions for the first bit
-                        output_lengths = gate_batch_outputs.argmax(dim=1)+gate_delay
+                        gate_batch_outputs[:,:3] = 0 # ignore gate predictions for the first bit
+                        output_lengths = get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)
                         diagonality_batch, avg_prob_batch, enc_max_focus_batch, enc_min_focus_batch, enc_avg_focus_batch = alignment_metric(alignments_batch, input_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0), output_lengths=output_lengths)
                         
                         # split batch into items
@@ -528,11 +535,11 @@ class T2S:
                             for k, (mel_outputs, mel_outputs_postnet, gate_outputs, alignments, diagonality, avg_prob, enc_max_focus, enc_min_focus, enc_avg_focus) in enumerate(sametext_batch):
                                 # factors that make up score
                                 weighted_score =  avg_prob.item() # general alignment quality
-                                weighted_score -= (max(diagonality.item(),1.11)-1.11) * diagonality_weighting  # consistent pace
-                                weighted_score -= max((enc_max_focus.item()-20), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
-                                weighted_score -= max(0.9-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
+                                weighted_score -= (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # consistent pace
+                                weighted_score -= max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
+                                weighted_score -= max(0.4-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
                                 weighted_score -= max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
-                                score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max((enc_max_focus.item()-20), 0) * 0.005 * max_focus_weighting,2)} {round(max(0.9-enc_min_focus.item(),0),2)}|"
+                                score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting,2)} {round(max(0.4-enc_min_focus.item(),0)*min_focus_weighting,2)}|"
                                 if weighted_score > best_score[j]:
                                     best_score[j] = weighted_score
                                     best_score_str[j] = score_str
@@ -562,7 +569,7 @@ class T2S:
                 
                 # stack best output arrays into tensors for WaveGlow
                 gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0)
-                max_length = torch.max(gate_batch_outputs.argmax(dim=1)) # get largest duration
+                max_length = torch.max(get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)) # get largest duration
                 mel_batch_outputs = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 mel_batch_outputs_postnet = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs_postnet, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 alignments_batch = torch.nn.utils.rnn.pad_sequence(alignments_batch, batch_first=True, padding_value=0)[:,:max_length,:]
@@ -619,6 +626,11 @@ class T2S:
                     eta_finish = (remaining_files*time_per_clip)/60
                     print(f"{text_index}/{total_len}, {eta_finish:.2f}mins remaining.")
                     del time_per_clip, eta_finish, remaining_files, time_elapsed
+                
+                if self.conf['show_inference_alignment_scores']:
+                    for k, bs in enumerate(best_score):
+                        print(f"Best_Score {k}: {bs}")
+                        print(f"Score_Str  {k}: {best_score_str[k]}\n")
                 
                 audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
                 time_to_gen = round(time.time()-start_time,3)
