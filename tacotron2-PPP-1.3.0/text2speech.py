@@ -75,31 +75,61 @@ def chunks(lst, n):
         yield lst[i:i + n]
 
 
-# TODO, invert this guy. Instead of splitting chunks of text that go over a limit. Split ALL the text at the start, and keep merging the text into chunks that are as large as possible!
-def parse_text_into_quotes(texts):
-    """Swap speaker at every quote mark. Also split longer phrases at periods.
-    If text previously inside a quote is too long and split, then each split segment will have quotes around it (for information later on rather than accuracy to the original text)."""
-    max_text_segment_length = 120
+# generator for text splitting.
+def parse_text_into_segments(texts, split_at_quotes=True, target_segment_length=200):
+    """Swap speaker at every quote mark. Each split segment will have quotes around it (for information later on rather than accuracy to the original text)."""
+    
+    # split text by quotes
     quo ='"' # nested quotes in list comprehension are hard to work with
     texts = [f'"{text.replace(quo,"").strip()}"' if i%2 else text.replace(quo,"").strip() for i, text in enumerate(unidecode(texts).split('"'))]
     
-    texts_segmented = []
-    for text in texts:
+    # clean up and remove empty texts
+    def clean_text(text):
         text = text.strip()
-        if not len(text.replace('"','').strip()): continue
-        text = text\
-            .replace("\n"," ")\
-            .replace("  "," ")\
-            .replace("> --------------------------------------------------------------------------","")
-        if len(text) > max_text_segment_length:
-            for seg in [x.strip() for x in sent_tokenize(text) if len(x.strip()) and x is not '"']: 
-                if '"' in text:
-                    if seg[0] != '"': seg='"'+seg
-                    if seg[-1] != '"': seg+='"'
-                texts_segmented.append(seg)
-        else:
-            texts_segmented.append(text.strip())
-    return texts_segmented
+        text = text.replace("\n"," ").replace("  "," ").replace("> --------------------------------------------------------------------------","")
+        return text
+    texts = [clean_text(text) for text in texts if len(text.strip().replace('"','').strip()) or len(clean_text(text))]
+    assert len(texts)
+    
+    # split text by sentences and add commas in where needed.
+    def quotify(seg, text):
+        if '"' in text:
+            if seg[0] != '"': seg='"'+seg
+            if seg[-1] != '"': seg+='"'
+        return seg
+    texts_tmp = []
+    texts = [texts_tmp.extend([quotify(x.strip(), text) for x in sent_tokenize(text) if len(x.strip()) and x is not '"']) for text in texts]
+    texts = texts_tmp
+    del texts_tmp
+    assert len(texts)
+    
+    # merge neighbouring sentences
+    quote_mode = False
+    texts_output = []
+    texts_segmented = ''
+    texts_len = len(texts)
+    for i, text in enumerate(texts):
+        # split segment if quote swap
+        if split_at_quotes and ('"' in text and quote_mode == False) or (not '"' in text and quote_mode == True):
+            texts_segmented.replace('""','')
+            texts_output.append(texts_segmented)
+            texts_segmented=text
+            quote_mode = not quote_mode
+        
+        # split segment if max length
+        elif len(texts_segmented+text) > target_segment_length:
+            texts_segmented.replace('""','')
+            texts_output.append(texts_segmented)
+            texts_segmented=text
+        
+        else: # continue adding to segment
+            texts_segmented+= f' {text}'
+    # add any remaining stuff.
+    if len(texts_segmented):
+        texts_output.append(texts_segmented)
+    assert len(texts_output)
+    
+    return texts_output
 
 
 class T2S:
@@ -292,18 +322,17 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, gate_delay=6, gate_threshold=0.5, outdir=r'server_infer', filename_prefix=None, status_updates=False, time_to_gen=True, absolute_maximum_tries=4096, absolutely_required_score=-1e3):    
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=6, gate_threshold=0.5, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, absolute_maximum_tries=4096, absolutely_required_score=-1e3):    
         with torch.no_grad():
-            if time_to_gen:
-                audio_len = 0
-                start_time = time.time()
+            # time to gen
+            audio_len = 0
+            start_time = time.time()
             
             # Score Parameters
             diagonality_weighting = 0.5 # 'stutter factor', a penalty for clips where the model jumps back and forwards in the sentence.
             max_focus_weighting = 1.0   # 'stuck factor', a penalty for clips that spend execisve time on the same letter.
             min_focus_weighting = 1.0   # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
             avg_focus_weighting = 1.0   # 'skip factor', a penalty for skipping very large parts of the input text
-            
             
             # add a filename prefix to keep multiple requests seperate
             if not filename_prefix:
@@ -315,11 +344,12 @@ class T2S:
             elif textseg_mode == 'segment_by_line':
                 texts = text.split("\n")
             elif textseg_mode == 'segment_by_sentence':
-                texts = [x.strip() for x in sent_tokenize(text) if len(x.strip())]# temp, nltk has a good version of this so no point making my own.
+                texts = parse_text_into_segments(text, split_at_quotes=False, target_segment_length=textseg_len_target)
             elif textseg_mode == 'segment_by_sentencequote':
-                texts = parse_text_into_quotes(text)
+                texts = parse_text_into_segments(text, split_at_quotes=True, target_segment_length=textseg_len_target)
             else:
                 raise NotImplementedError(f"textseg_mode of {textseg_mode} is invalid.")
+            del text
             
             # cleanup for empty inputs.
             texts = [x.strip() for x in texts if len(x.strip())]
@@ -349,6 +379,7 @@ class T2S:
             else:
                 raise NotImplementedError(f"batch_mode of {batch_mode} is invalid.")
             
+            show_inference_progress_start = time.time()
             continue_from = 0
             counter = 0
             total_specs = 0
@@ -364,14 +395,6 @@ class T2S:
                     text_batch_in_progress = []
                 else:
                     continue # if batch not ready, add another text
-                
-                if self.conf['show_inference_progress']:
-                    time_elapsed = time.time()-start_time
-                    time_per_clip = time_elapsed/(text_index+1)
-                    remaining_files = (total_len-(text_index+1))
-                    eta_finish = remaining_files/time_per_clip
-                    print(f"{text_index}/{total_len}, {eta_finish}mins remaining.")
-                    del time_per_clip, eta_finish, remaining_files, time_elapsed
                 
                 self.tacotron.decoder.max_decoder_steps = int(min(max([len(t) for t in text_batch]) * float(dyna_max_duration_s)*frames_per_second, float(max_duration_s)*frames_per_second))
                 
@@ -463,7 +486,7 @@ class T2S:
                 text_lengths = text_lengths.clone()
                 sequence = sequence.clone()
                 
-                print("sequence.shape[0] =",sequence.shape[0])
+                print("sequence.shape[0] =",sequence.shape[0]) # debug
                 
                 try:
                     best_score = np.ones(simultaneous_texts) * -9e9
@@ -530,9 +553,12 @@ class T2S:
                     if status_updates: print("Done")
                     pass
                 
+                # cleanup VRAM
+                style_input = text_lengths = sequence = None
+                
                 # [[mel, melpost, gate, align], [mel, melpost, gate, align], [mel, melpost, gate, align]] -> [[mel, mel, mel], [melpost, melpost, melpost], [gate, gate, gate], [align, align, align]]
-                # zip is being weird so alternative used
-                mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = [x[0][0].T for x in best_generations], [x[1][0].T for x in best_generations], [x[2][0] for x in best_generations], [x[3][0] for x in best_generations] # pickup whatever was the best attempts
+                mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = [x[0][0].T for x in best_generations], [x[1][0].T for x in best_generations], [x[2][0] for x in best_generations], [x[3][0] for x in best_generations]
+                # pickup the best attempts from each input
                 
                 # stack best output arrays into tensors for WaveGlow
                 gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0)
@@ -541,12 +567,14 @@ class T2S:
                 mel_batch_outputs_postnet = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs_postnet, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 alignments_batch = torch.nn.utils.rnn.pad_sequence(alignments_batch, batch_first=True, padding_value=0)[:,:max_length,:]
                 
-                if status_updates: print("Running WaveGlow... ", end='')
+                if status_updates:
+                    print("Running WaveGlow... ", end='')
                 # Run WaveGlow
-                audio_batch = self.waveglow.infer(mel_batch_outputs_postnet, speaker_ids=waveglow_speaker_ids, sigma=self.wg_train_sigma*0.9)
+                audio_batch = self.waveglow.infer(mel_batch_outputs_postnet, speaker_ids=waveglow_speaker_ids, sigma=self.wg_train_sigma*0.925)
                 audio_denoised_batch = self.wg_denoiser(audio_batch, strength=0.0001).squeeze(1)
-                print("audio_denoised_batch.shape", audio_denoised_batch.shape)
-                if status_updates: print('Done')
+                print("audio_denoised_batch.shape =", audio_denoised_batch.shape) # debug
+                if status_updates:
+                    print('Done')
                 
                 for j, (audio, audio_denoised) in enumerate(zip(audio_batch.split(1, dim=0), audio_denoised_batch.split(1, dim=0))):
                     # remove WaveGlow padding
@@ -584,9 +612,17 @@ class T2S:
                     counter+=1
                     audio_len+=audio_end
                 
-                if time_to_gen:
-                    audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
-                    time_to_gen = round(time.time()-start_time,3)
+                if self.conf['show_inference_progress']:
+                    time_elapsed = time.time()-show_inference_progress_start
+                    time_per_clip = time_elapsed/(text_index+1)
+                    remaining_files = (total_len-(text_index+1))
+                    eta_finish = (remaining_files*time_per_clip)/60
+                    print(f"{text_index}/{total_len}, {eta_finish:.2f}mins remaining.")
+                    del time_per_clip, eta_finish, remaining_files, time_elapsed
+                
+                audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
+                time_to_gen = round(time.time()-start_time,3)
+                if show_time_to_gen:
                     print(f"Took {time_to_gen}s to generate {audio_seconds_generated}s of audio. (best of {tries.sum().astype('int')} tries)")
                 
                 print("\n") # seperate each pass

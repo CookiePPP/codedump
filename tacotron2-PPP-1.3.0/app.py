@@ -21,7 +21,7 @@ sample_current_text = "" # default text entered
 sample_background_text = "Enter text." # this is the faded out text when nothing has been entered
 sample_speaker = ["(Show) My Little Pony_Twilight",]
 sample_style_mode = "torchmoji_hidden"
-sample_textseg_mode="segment_by_line"
+sample_textseg_mode="segment_by_sentencequote"
 sample_batch_mode="nochange"
 sample_max_attempts=256
 sample_max_duration_s=20
@@ -31,6 +31,7 @@ sample_use_arpabet = "on"
 sample_target_score = 0.75
 sample_multispeaker_mode = "random"
 sample_cat_silence_s = 0.1
+sample_textseg_len_target = 120
 
 use_localhost = t2s.conf['localhost']
 
@@ -59,6 +60,7 @@ def texttospeech():
         target_score = float(result.get('input_target_score'))
         multispeaker_mode = result.get('input_multispeaker_mode')
         cat_silence_s = float(result.get('input_cat_silence_s'))
+        textseg_len_target = int(result.get('input_textseg_len_target'))
         wg_current = result.get('input_wg_current')
         tt_current = result.get('input_tt_current')
         print(result)
@@ -75,7 +77,7 @@ def texttospeech():
         text = text.replace('\r\n','\n')
         
         # generate an audio file from the inputs
-        filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
+        filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s, textseg_len_target)
         print(f"GENERATED {filename}\n\n")
         
         # send updated webpage back to client along with page to the file
@@ -108,7 +110,8 @@ def texttospeech():
                                 total_specs=total_specs,
                                 n_passes=n_passes,
                                 multispeaker_mode=multispeaker_mode,
-                                cat_silence_s=cat_silence_s,)
+                                cat_silence_s=cat_silence_s,
+                                textseg_len_target=textseg_len_target,)
 
 #Route to render GUI
 @app.route('/')
@@ -142,7 +145,8 @@ def show_entries():
                             total_specs="",
                             n_passes="",
                             multispeaker_mode=sample_multispeaker_mode,
-                            cat_silence_s=sample_cat_silence_s,)
+                            cat_silence_s=sample_cat_silence_s,
+                            textseg_len_target=sample_textseg_len_target,)
 
 #Route to stream music
 @app.route('/<voice>', methods=['GET'])

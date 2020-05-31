@@ -33,6 +33,9 @@
             },
             "Tacotron2 Torchmoji v0.22.1 (Large Prenet 110K)": {
                 "modelpath": "outdir_truncated1/checkpoint_110000_weights"
+            },
+            "Tacotron2 Torchmoji v0.22.1 (Large Prenet 130K)": {
+                "modelpath": "outdir_truncated1/checkpoint_130000_weights"
             }
         }
     },

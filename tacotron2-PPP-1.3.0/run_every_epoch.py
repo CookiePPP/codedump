@@ -1,5 +1,5 @@
 current_iteration = iteration
-decay_start = 180000
+decay_start = 300000
 A_ = 30e-5
 B_ = 30000
 C_ = 0e-5
