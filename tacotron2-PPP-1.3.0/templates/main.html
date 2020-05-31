@@ -71,7 +71,7 @@
                     <label for="select">Text --> Spectogram Model</label>
                     <select name="input_tt_current" class="form-control">
                         {%for i in range(0, tt_len)%}
-                        <option value='{{tacotron_conf[i][0]}}' {{ 'selected' if tt_current == tacotron_conf[i][0] else '' }}>{{tacotron_conf[i][0]}}</option>
+                        <option value='{{tacotron_conf[i][0][9:] if "[MISSING]" in tacotron_conf[i][0] else tacotron_conf[i][0]}}' {{ 'selected' if tt_current == tacotron_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in tacotron_conf[i][0] else ''}}>{{tacotron_conf[i][0]}}</option>
                         {%endfor%}
                     </select></div>
                 <button class="collapsible" type="button">Advanced Options</button>
@@ -98,13 +98,13 @@
                         </div>
                         <div class="form-group">
                             <label for="select">Max Duration per Input (Seconds)</label>
-                            <label style="zoom: 0.7;">(This will control the amount of VRAM used and will kill collapsed clips faster - therefore run faster on batched inputs.)</label>
+                            <label style="zoom: 0.7;">(This will control the maximum amount of VRAM used. Decrease 'Input Segmentation Target Length' or Increase this if you notice longer text inputs getting cut off before they can finish.)</label>
                             <input style="width: -webkit-fill-available;" class="form-control" value="{{max_duration_s}}" type="number" min="0.1" step="0.1" name="input_max_duration_s">
                         </div>
                         <div class="form-group">
                             <label for="select">Dynamic Max Duration Scaler</label>
-                            <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.3 gives 300 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
-                            <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.1" step="0.0125" name="input_dyna_max_duration_s">
+                            <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.2 gives 200 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.05" step="0.0125" name="input_dyna_max_duration_s">
                         </div>
                         <div class="form-group">
                             <label for="select">Max Attempts</label>
@@ -130,6 +130,11 @@
                                 <option value="segment_by_line" {{ 'selected' if textseg_mode == 'segment_by_line' else '' }}>Split text by lines</option>
                                 <option value="segment_by_sentence" {{ 'selected' if textseg_mode == 'segment_by_sentence' else '' }}>Split text by sentences</option>
                                 <option value="segment_by_sentencequote" {{ 'selected' if textseg_mode == 'segment_by_sentencequote' else '' }}>Split text by sentences and quotes</option>
+                            </select></div>
+                        <div class="form-group">
+                            <label for="select">Input Segmentation Target Length</label>
+                            <label style="zoom: 0.7;">(Applies to 'Split text by sentence' and similar. Will merge neighbouring sentences to get as close to Target Length as possible without going over.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{textseg_len_target}}" type="number" max="9999" min="50" step="1" name="input_textseg_len_target">
                             </select></div>
                         <div class="form-group">
                             <label for="select">Style Mode</label>
