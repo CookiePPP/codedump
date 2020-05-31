@@ -31,8 +31,6 @@ import os.path
 
 from metric import alignment_metric
 
-from apex import amp
-from apex import optimizers as apexopt
 save_file_check_path = "save"
 num_workers_ = 1 # DO NOT CHANGE WHEN USING TRUNCATION
 start_from_checkpoints_from_zero = 0
@@ -576,6 +574,11 @@ if __name__ == '__main__':
 
     if gen_new_mels:
         print("Generating Mels"); create_mels(); print("Finished Generating Mels")
+    
+    # these are needed for fp16 training, not inference
+    if hparams.fp16_run:
+        from apex import amp
+        from apex import optimizers as apexopt
     
     train(args.output_directory, args.log_directory, args.checkpoint_path,
           args.warm_start, args.warm_start_force, args.n_gpus, args.rank, args.group_name, hparams)
