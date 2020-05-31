@@ -452,12 +452,12 @@ class T2S:
                     try:
                         tokenized, _, _ = self.tm_sentence_tokenizer.tokenize_sentences(text_batch) # input array [B] e.g: ["Test?","2nd Sentence!"]
                     except:
-                        raise Exception(f"text\n{text_batch}\nfailed to tokenize.")
+                        raise Exception(f"TorchMoji failed to tokenize text:\n{text_batch}")
                     try:
                         embedding = self.tm_torchmoji(tokenized) # returns np array [B, Embed]
                     except Exception as ex:
                         print(f'Exception: {ex}')
-                        print(f"text: {text_batch} failed to process.")
+                        print(f"TorchMoji failed to process text:\n{text_batch}")
                         #raise Exception(f"text\n{text}\nfailed to process.")
                     style_input = torch.from_numpy(embedding).cuda().half().repeat_interleave(batch_size_per_text, dim=0)
                 elif style_mode == 'torchmoji_string':
@@ -629,7 +629,7 @@ class T2S:
                 
                 if self.conf['show_inference_alignment_scores']:
                     for k, bs in enumerate(best_score):
-                        print(f"Best_Score {k}: {bs}")
+                        print(f"Best_Score {k}: {bs:0.4f}")
                         print(f"Score_Str  {k}: {best_score_str[k]}\n")
                 
                 audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
@@ -664,7 +664,10 @@ class T2S:
                 fpaths += [fpath,]
                 if running_fsize/(1024**3) > 2.0 or (i+1) == n_audio_batches or (len(fpaths) > 300): # if total size of fpaths is > 2GB or at final file: save as output
                     fpath_str = '"'+'" "'.join(fpaths)+'"' # chain together fpaths in string for SoX input
-                    out_name = f"{output_filename}_{out_count:02}.wav"
+                    output_extension = self.conf['sox_output_ext']
+                    if output_extension[0] != '.':
+                        output_extension = f".{output_extension}"
+                    out_name = f"{output_filename}_{out_count:02}{output_extension}"
                     out_path = os.path.join(outdir, out_name)
                     os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
                     
