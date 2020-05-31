@@ -554,7 +554,7 @@ class T2S:
                     pass
                 
                 # cleanup VRAM
-                style_input = text_lengths = sequence = None
+                style_input = sequence = None
                 
                 # [[mel, melpost, gate, align], [mel, melpost, gate, align], [mel, melpost, gate, align]] -> [[mel, mel, mel], [melpost, melpost, melpost], [gate, gate, gate], [align, align, align]]
                 mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = [x[0][0].T for x in best_generations], [x[1][0].T for x in best_generations], [x[2][0] for x in best_generations], [x[3][0] for x in best_generations]
@@ -627,52 +627,42 @@ class T2S:
                 
                 print("\n") # seperate each pass
             
-            # merge clips
+            # ------ merge clips ------ #
             output_filename = f"{filename_prefix}_output"
+            n_audio_batches = -(-len( glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) ) // 300)# get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
             
-            # get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
-            n_audio_batches = -(-len( glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) ) // 300)
-            
-            #
-            # Everything below here is in need of a rewrite to remove temp files as soon as they're not needed.
-            #
-            
-            # merge batches of 300 files together
-            for i in range(n_audio_batches):
-                print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
-                os.system(f'sox {os.path.join(outdir, f"{filename_prefix}_{i:04}_*.wav")} -b 16 {os.path.join(outdir, f"{filename_prefix}_concat_{i:04}.wav")}')
-                print("Done")
-            
-            # merge the merged batches into final output(s)
-            # WAV files cannot go above 4GB in size, therefore output may be split into pieces
-            print("Merging remaining files...")
             running_fsize = 0
             fpaths = []
             out_count = 0
-            merged_files = glob(os.path.join(outdir, f"{filename_prefix}_concat_*.wav"))
-            for i, fpath in enumerate(merged_files):
+            for i in range(n_audio_batches):
+                # merge batch of 300 files together
+                print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
+                fpath = os.path.join(outdir, f"{filename_prefix}_concat_{i:04}.wav")
+                os.system(f'sox {os.path.join(outdir, f"{filename_prefix}_{i:04}_*.wav")} -b 16 {fpath}')
+                
+                # delete the original 300 files
+                print("Cleaning up remaining temp files... ", end="")
+                tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}_{i:04}_*.wav")) if "output" not in fp]
+                _ = [os.remove(fp) for fp in tmp_files]
+                print("Done")
+                
+                # add merged file to final output(s)
                 fsize = os.stat(fpath).st_size
                 running_fsize += fsize
                 fpaths += [fpath,]
-                if running_fsize/(1024**3) > 2.0 or i >= (len(merged_files)-1) or (len(fpaths) > 300): # if total size of fpaths is > 2GB or at final file
-                    print("running_fsize =", running_fsize/(1024**3))
+                if running_fsize/(1024**3) > 2.0 or (i+1) == n_audio_batches or (len(fpaths) > 300): # if total size of fpaths is > 2GB or at final file: save as output
                     fpath_str = '"'+'" "'.join(fpaths)+'"' # chain together fpaths in string for SoX input
                     out_name = f"{output_filename}_{out_count:02}.wav"
                     out_path = os.path.join(outdir, out_name)
                     os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
                     
-                    if running_fsize >= (os.stat(out_path).st_size - 1024):
-                        print("Cleaning up merged temp files... ", end="")
+                    if running_fsize >= (os.stat(out_path).st_size - 1024): # if output seems to have correctly generated.
+                        print("Cleaning up merged temp files... ", end="") # delete the temp files and keep the output
                         _ = [os.remove(fp) for fp in fpaths]
                         print("Done")
+                    
                     running_fsize = 0
                     out_count+=1
                     fpaths = []
-            print("Merging Done")
-            
-            print("Cleaning up remaining temp files... ", end="")
-            tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) if "output" not in fp]
-            _ = [os.remove(fp) for fp in tmp_files]
-            print("Done")
-            
+        
         return out_name, time_to_gen, audio_seconds_generated, total_specs, n_passes
