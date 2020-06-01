@@ -396,20 +396,19 @@ class Encoder(nn.Module):
         text = text.transpose(1, 2) # [B, embed, sequence] -> [B, sequence, embed]
         
         if text_lengths is not None:
-            text *= get_mask_from_lengths(text_lengths)[:, :, None]
+            #text *= get_mask_from_lengths(text_lengths)[:, :, None]
             # pytorch tensor are not reversible, hence the conversion
-            #text_lengths = text_lengths.cpu().numpy()
-            #text = nn.utils.rnn.pack_padded_sequence(
-            #    text, text_lengths, batch_first=True, enforce_sorted=False)
+            text_lengths = text_lengths.cpu().numpy()
+            text = nn.utils.rnn.pack_padded_sequence(
+                text, text_lengths, batch_first=True, enforce_sorted=False)
         
         self.lstm.flatten_parameters()
         outputs, _ = self.lstm(text) # -> [B, sequence, embed]
         
         if text_lengths is not None:
-            
-            outputs *= get_mask_from_lengths(text_lengths)[:, :, None]
-            #outputs, _ = nn.utils.rnn.pad_packed_sequence(
-            #    outputs, batch_first=True)
+            #outputs *= get_mask_from_lengths(text_lengths)[:, :, None]
+            outputs, _ = nn.utils.rnn.pad_packed_sequence(
+                outputs, batch_first=True)
         
         return outputs
 
@@ -772,7 +771,7 @@ class Decoder(nn.Module):
         
         return mel_outputs, gate_outputs, alignments
 
-    def inference(self, memory):
+    def inference(self, memory, memory_lengths=None):
         """ Decoder inference
         PARAMS
         ------
@@ -789,7 +788,7 @@ class Decoder(nn.Module):
             memory_lengths = memory_lengths-2
         decoder_input = self.get_go_frame(memory)
         
-        self.initialize_decoder_states(memory, mask=None)
+        self.initialize_decoder_states(memory, mask=None if memory_lengths is None else ~get_mask_from_lengths(memory_lengths))
         
         sig_max_gates = torch.zeros(decoder_input.size(0))
         mel_outputs, gate_outputs, alignments, break_point = [], [], [], self.max_decoder_steps
@@ -967,7 +966,7 @@ class Tacotron2(nn.Module):
             encoder_outputs = torch.cat((encoder_outputs, embedded_speakers), dim=2) # [batch, time, encoder_out]
         
         mel_outputs, gate_outputs, alignments = self.decoder.inference(
-            encoder_outputs)
+            encoder_outputs, memory_lengths=text_lengths)
         
         mel_outputs_postnet = self.postnet(mel_outputs)
         mel_outputs_postnet.add_(mel_outputs)

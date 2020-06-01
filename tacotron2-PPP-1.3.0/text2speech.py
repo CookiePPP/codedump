@@ -38,23 +38,34 @@ def alignment_metric(alignments, input_lengths=None, output_lengths=None, averag
     if output_lengths == None:
         output_lengths = torch.ones(alignments.size(0), device=alignments.device)*(alignments.shape[2]-1) # [B] # 767
     batch_size = alignments.size(0)
-    optimums = torch.sqrt(input_lengths.double()**2 + output_lengths.double()**2).view(batch_size)
+    optimums = torch.sqrt(input_lengths.double().pow(2) + output_lengths.double().pow(2)).view(batch_size)
     
     # [B, enc, dec] -> [B, dec], [B, dec]
     values, cur_idxs = torch.max(alignments, 1) # get max value in column and location of max value
     
     cur_idxs = cur_idxs.float()
-    prev_indx = torch.cat((cur_idxs[:,0][:,None], cur_idxs[:,:-1]), dim=1) # shift entire tensor right by one.
-    dist = ((prev_indx - cur_idxs).pow(2) + 1).pow(0.5)
-    dist.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=dist.size(1)), 0.0) # remove padding
-    dist = dist.sum(dim=(1)) # remove padding
-    diagonalitys = (dist + 1.4142135)/optimums # remove padding
+    prev_indx = torch.cat((cur_idxs[:,0][:,None], cur_idxs[:,:-1]), dim=1) # shift entire tensor by one.
+    dist = ((prev_indx - cur_idxs).pow(2) + 1).pow(0.5) # [B, dec]
+    dist.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=dist.size(1)), 0.0) # set dist of padded to zero
+    dist = dist.sum(dim=(1)) # get total dist for each B
+    diagonalitys = (dist + 1.4142135)/optimums # dist / optimal dist
     
     alignments.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=alignments.size(2))[:,None,:], 0.0)
-    encoder_max_focus = torch.sum(alignments, dim=2).max(dim=1)[0] # [B, enc, dec] -> [B, sum_enc] -> [B]
-    encoder_min_focus = torch.sum(alignments, dim=2).min(dim=1)[0]
-    encoder_avg_focus = torch.sum(alignments, dim=2).mean(dim=1)
+    att_enc_total = torch.sum(alignments, dim=2)# [B, enc, dec] -> [B, enc]
     
+    # calc max (with padding ignored)
+    att_enc_total.masked_fill_(~get_mask_from_lengths(input_lengths, max_len=att_enc_total.size(1)), 0.0)
+    encoder_max_focus = att_enc_total.max(dim=1)[0] # [B, enc] -> [B]
+    
+    # calc mean (with padding ignored)
+    encoder_avg_focus = att_enc_total.mean(dim=1)   # [B, enc] -> [B]
+    encoder_avg_focus *= (att_enc_total.size(1)/input_lengths.float())
+    
+    # calc min (with padding ignored)
+    att_enc_total.masked_fill_(~get_mask_from_lengths(input_lengths, max_len=att_enc_total.size(1)), 1.0)
+    encoder_min_focus = att_enc_total.min(dim=1)[0] # [B, enc] -> [B]
+    
+    # calc average max attention (with padding ignored)
     values.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=values.size(1)), 0.0) # because padding
     avg_prob = values.mean(dim=1)
     avg_prob *= (alignments.size(2)/output_lengths.float()) # because padding
@@ -98,7 +109,7 @@ def parse_text_into_segments(texts, split_at_quotes=True, target_segment_length=
             if seg[-1] != '"': seg+='"'
         return seg
     texts_tmp = []
-    texts = [texts_tmp.extend([quotify(x.strip(), text) for x in sent_tokenize(text) if len(x.strip()) and x is not '"']) for text in texts]
+    texts = [texts_tmp.extend([quotify(x.strip(), text) for x in sent_tokenize(text) if len(x.replace('"','').strip())]) for text in texts]
     texts = texts_tmp
     del texts_tmp
     assert len(texts)
@@ -237,7 +248,12 @@ class T2S:
         return embedding
     
     
-    def load_waveglow(self, waveglow_path, config_fpath, ax=True):
+    def is_ax(self, config):
+        """Quickly check if a model uses the Ax WaveGlow core by what's available in the config file."""
+        return True if 'upsample_first' in config.keys() else False
+    
+    
+    def load_waveglow(self, waveglow_path, config_fpath):
         # Load config file
         with open(config_fpath) as f:
             data = f.read()
@@ -254,13 +270,13 @@ class T2S:
         print(f"Config File from '{config_fpath}' successfully loaded.")
         
         # import the correct model core
-        if not ax:
+        if self.is_ax(waveglow_config):
+            from efficient_model_ax import WaveGlow
+        else:
             if waveglow_config["yoyo"]:
                 from efficient_model import WaveGlow
             else:
                 from glow import WaveGlow
-        else:
-            from efficient_model_ax import WaveGlow
         
         # initialize model
         print(f"intializing WaveGlow model... ", end="")
@@ -372,6 +388,9 @@ class T2S:
             # time to gen
             audio_len = 0
             start_time = time.time()
+            
+            # Score Metric
+            scores = []
             
             # Score Parameters
             diagonality_weighting = 0.5 # 'stutter factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
@@ -574,11 +593,12 @@ class T2S:
                             for k, (mel_outputs, mel_outputs_postnet, gate_outputs, alignments, diagonality, avg_prob, enc_max_focus, enc_min_focus, enc_avg_focus) in enumerate(sametext_batch):
                                 # factors that make up score
                                 weighted_score =  avg_prob.item() # general alignment quality
-                                weighted_score -= (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # consistent pace
-                                weighted_score -= max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
-                                weighted_score -= max(0.4-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
-                                weighted_score -= max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
-                                score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting,2)} {round(max(0.4-enc_min_focus.item(),0)*min_focus_weighting,2)}|"
+                                diagonality_punishment = (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # consistent pace
+                                max_focus_punishment = max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
+                                min_focus_punishment = max(0.4-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
+                                avg_focus_punishment = max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
+                                weighted_score -= (diagonality_punishment + max_focus_punishment + min_focus_punishment + avg_focus_punishment)
+                                score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max_focus_punishment,2)} {round(min_focus_punishment,2)} {round(avg_focus_punishment,2)}|"
                                 if weighted_score > best_score[j]:
                                     best_score[j] = weighted_score
                                     best_score_str[j] = score_str
@@ -646,9 +666,9 @@ class T2S:
                     save_path = os.path.join(outdir, filename)
                     
                     # add silence to clips (ignore last clip)
-                    if cat_silence_s and not j == audio_batch.shape[0]-1:
+                    if cat_silence_s:
                         cat_silence_samples = int(cat_silence_s*self.tt_hparams.sampling_rate)
-                        audio = torch.cat((audio, torch.zeros((1, cat_silence_samples), device=audio.device, dtype=audio.dtype)), dim=1)
+                        audio = torch.nn.functional.pad(audio, (0, cat_silence_samples))
                     
                     # scale audio for int16 output
                     audio = (audio * 2**15).squeeze().cpu().numpy().astype('int16')
@@ -678,6 +698,9 @@ class T2S:
                         print(f"Input_Str  {k}: '{text_batch[k]}'")
                         print(f"Best_Score {k}: {bs:0.4f}")
                         print(f"Score_Str  {k}: {best_score_str[k]}\n")
+                
+                for score in best_score:
+                    scores+=[score,]
                 
                 audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
                 time_to_gen = round(time.time()-start_time,3)
@@ -727,4 +750,7 @@ class T2S:
                     out_count+=1
                     fpaths = []
         
-        return out_name, time_to_gen, audio_seconds_generated, total_specs, n_passes
+        scores = np.stack(scores)
+        avg_score = np.mean(scores)
+        
+        return out_name, time_to_gen, audio_seconds_generated, total_specs, n_passes, avg_score

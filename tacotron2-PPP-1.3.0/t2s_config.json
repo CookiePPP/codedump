@@ -7,7 +7,7 @@
     "tacotron": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
-        "default_model": "Tacotron2 Torchmoji v0.22.1 (Large Prenet 150K)",
+        "default_model": "Tacotron2 Torchmoji v0.22.1 (Large Prenet 160K)",
         "models": {
             "Tacotron2 Torchmoji v0.2 (Baseline 178K)": {
                 "modelpath": "outdir_truncated1/checkpoint_178000_weights_baseline"
@@ -59,7 +59,7 @@
     "waveglow": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
-        "default_model": "LargeWaveGlow V3.6 (GT[+Postnet], 48 Flow, n_group 24 190K[+30K])",
+        "default_model": "MiniWaveGlow V2 (GT, 16 Flow, n_group 120 282K)",
         "models": {
             "MiniWaveGlow V2 (GT, 16 Flow, n_group 120 282K)": {
                 "modelpath": "H:/TTCheckpoints/waveglow/outdir_EfficientSmallGlobalSpeakerEmbeddings/Testing2/best_val_model",

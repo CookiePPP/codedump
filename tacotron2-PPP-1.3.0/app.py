@@ -77,7 +77,7 @@ def texttospeech():
         text = text.replace('\r\n','\n')
         
         # generate an audio file from the inputs
-        filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s, textseg_len_target)
+        filename, gen_time, gen_dur, total_specs, n_passes, avg_score = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s, textseg_len_target)
         print(f"GENERATED {filename}\n\n")
         
         # send updated webpage back to client along with page to the file
@@ -109,6 +109,7 @@ def texttospeech():
                                 gen_dur=round(gen_dur,2),
                                 total_specs=total_specs,
                                 n_passes=n_passes,
+                                avg_score=round(avg_score,3),
                                 multispeaker_mode=multispeaker_mode,
                                 cat_silence_s=cat_silence_s,
                                 textseg_len_target=textseg_len_target,)
@@ -144,6 +145,7 @@ def show_entries():
                             gen_dur="",
                             total_specs="",
                             n_passes="",
+                            avg_score="",
                             multispeaker_mode=sample_multispeaker_mode,
                             cat_silence_s=sample_cat_silence_s,
                             textseg_len_target=sample_textseg_len_target,)
