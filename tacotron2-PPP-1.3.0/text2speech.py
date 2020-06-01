@@ -235,7 +235,7 @@ class T2S:
         return embedding
     
     
-    def load_waveglow(self, waveglow_path, config_fpath):
+    def load_waveglow(self, waveglow_path, config_fpath, ax=True):
         # Load config file
         with open(config_fpath) as f:
             data = f.read()
@@ -252,10 +252,13 @@ class T2S:
         print(f"Config File from '{config_fpath}' successfully loaded.")
         
         # import the correct model core
-        if waveglow_config["yoyo"]:
-            from efficient_model import WaveGlow
+        if not ax:
+            if waveglow_config["yoyo"]:
+                from efficient_model import WaveGlow
+            else:
+                from glow import WaveGlow
         else:
-            from glow import WaveGlow
+            from efficient_model_ax import WaveGlow
         
         # initialize model
         print(f"intializing WaveGlow model... ", end="")
@@ -329,7 +332,38 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=4, gate_threshold=0.1, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, absolute_maximum_tries=4096, absolutely_required_score=-1e3):
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=7, gate_threshold=0.1, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
+        """
+        PARAMS:
+        ...
+        gate_delay
+            default: 7
+            options: int ( 0 -> inf )
+            info: a modifier for when spectrograms are cut off.
+                  This would allow you to add silence to the end of a clip without an unnatural fade-out.
+                  The default of 7 will give 0.0875 seconds of delay before ending the clip.
+                  If this param is set too high then the model will try to start speaking again
+                  despite not having any text left to speak, therefore keeping it low is typical.
+        gate_threshold
+            default: 0.1
+            options: float ( 0.0 -> 1.0 )
+            info: used to control when Tacotron2 will stop generating new mel frames.
+                  This will effect speed of generation as the model will generate
+                  extra frames till it hits the threshold. This may be preferred if
+                  you believe the model is stopping generation too early.
+                  When end_mode == 'thresh', this param will also be used to decide
+                  when the audio from the best spectrograms should be cut off.
+        ...
+        end_mode
+            default: 'max'
+            options: ['max','thresh']
+            info: controls where the spectrograms are cut off.
+                  'max' will cut the spectrograms off at the highest gate output, 
+                  'thresh' will cut off spectrograms at the first gate output over gate_threshold.
+        """
+        assert end_mode in ['max','thresh'], f"end_mode of {end_mode} is not valid."
+        assert gate_delay > -10, "gate_delay is negative."
+        
         with torch.no_grad():
             # time to gen
             audio_len = 0
@@ -501,7 +535,6 @@ class T2S:
                     best_generations = [0]*simultaneous_texts
                     best_score_str = ['']*simultaneous_texts
                     while np.amin(best_score) < target_score:
-                    
                         # run Tacotron
                         if status_updates: print("Running Tacotron2... ", end='')
                         mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = self.tacotron.inference(sequence, tacotron_speaker_ids, style_input=style_input, style_mode=style_mode, text_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0))
@@ -511,8 +544,11 @@ class T2S:
                         total_specs+=mel_batch_outputs.shape[0]
                         
                         # get metrics for each item
-                        gate_batch_outputs[:,:3] = 0 # ignore gate predictions for the first bit
-                        output_lengths = get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)
+                        gate_batch_outputs[:,:7] = 0 # ignore gate predictions for the first bit
+                        if end_mode == 'thresh':
+                            output_lengths = get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)
+                        elif end_mode == 'max':
+                            output_lengths = gate_batch_outputs.argmax(dim=1)
                         diagonality_batch, avg_prob_batch, enc_max_focus_batch, enc_min_focus_batch, enc_avg_focus_batch = alignment_metric(alignments_batch, input_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0), output_lengths=output_lengths)
                         
                         # split batch into items
@@ -569,7 +605,14 @@ class T2S:
                 
                 # stack best output arrays into tensors for WaveGlow
                 gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0)
-                max_length = torch.max(get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)) # get largest duration
+                
+                # get duration(s)
+                if end_mode == 'thresh':
+                    max_lengths = get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)+gate_delay
+                elif end_mode == 'max':
+                    max_lengths = gate_batch_outputs.argmax(dim=1)+gate_delay
+                max_length = torch.max(max_lengths)
+                
                 mel_batch_outputs = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 mel_batch_outputs_postnet = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs_postnet, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 alignments_batch = torch.nn.utils.rnn.pad_sequence(alignments_batch, batch_first=True, padding_value=0)[:,:max_length,:]
@@ -585,12 +628,12 @@ class T2S:
                 
                 for j, (audio, audio_denoised) in enumerate(zip(audio_batch.split(1, dim=0), audio_denoised_batch.split(1, dim=0))):
                     # remove WaveGlow padding
-                    audio_end = (gate_batch_outputs[j].argmax()+gate_delay) * self.tt_hparams.hop_length
+                    audio_end = max_lengths[j] * self.tt_hparams.hop_length
                     audio = audio[:,:audio_end]
                     audio_denoised = audio_denoised[:,:audio_end]
                     
                     # remove Tacotron2 padding
-                    spec_end = gate_batch_outputs[j].argmax()+gate_delay
+                    spec_end = max_lengths[j]
                     mel_outputs = mel_batch_outputs.split(1, dim=0)[j][:,:,:spec_end]
                     mel_outputs_postnet = mel_batch_outputs_postnet.split(1, dim=0)[j][:,:,:spec_end]
                     alignments = alignments_batch.split(1, dim=0)[j][:,:spec_end,:text_lengths[j]]
@@ -629,6 +672,7 @@ class T2S:
                 
                 if self.conf['show_inference_alignment_scores']:
                     for k, bs in enumerate(best_score):
+                        print(f"Input_Str  {k}: '{text_batch[k]}'")
                         print(f"Best_Score {k}: {bs:0.4f}")
                         print(f"Score_Str  {k}: {best_score_str[k]}\n")
                 
