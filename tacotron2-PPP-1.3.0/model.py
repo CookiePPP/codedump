@@ -809,7 +809,7 @@ class Decoder(nn.Module):
                     break
             else:
                 # once ALL batch predictions have gone over gate_threshold at least once, set break_point
-                if i > 6: # model has very *interesting* starting predictions
+                if i > 4: # model has very *interesting* starting predictions
                     sig_max_gates = torch.max(torch.sigmoid(gate_output_cpu), sig_max_gates)# sigmoid -> max
                 if sig_max_gates.min() > self.gate_threshold: # min()  ( implicit item() as well )
                     break_point = min(break_point, i+self.gate_delay)
@@ -823,6 +823,9 @@ class Decoder(nn.Module):
         
         mel_outputs, gate_outputs, alignments = self.parse_decoder_outputs(
             mel_outputs, gate_outputs, alignments)
+        
+        # apply modification to the GPU as well.
+        gate_outputs = torch.sigmoid(gate_outputs)
         
         return mel_outputs, gate_outputs, alignments
 
@@ -883,7 +886,7 @@ class Tacotron2(nn.Module):
             (mel_padded, gate_padded, output_lengths))
             # returns ((x),(y)) as (x) for training input, (y) for ground truth/loss calc
     
-    def parse_output(self, outputs, output_lengths=None):
+    def mask_outputs(self, outputs, output_lengths=None):
         if self.mask_padding and output_lengths is not None:
             mask = ~get_mask_from_lengths(output_lengths)
             mask = mask.expand(self.n_mel_channels, mask.size(0), mask.size(1))
@@ -926,12 +929,11 @@ class Tacotron2(nn.Module):
         mel_outputs_postnet = self.postnet(mel_outputs)
         mel_outputs_postnet.add_(mel_outputs)
         
-        return self.parse_output(
+        return self.mask_outputs(
             [mel_outputs, mel_outputs_postnet, gate_outputs, alignments],
             output_lengths)
     
     def inference(self, text, speaker_ids, style_input=None, style_mode=None, text_lengths=None):
-        
         embedded_text = self.embedding(text).transpose(1, 2) # [B, embed, sequence]
         encoder_outputs = self.encoder.inference(embedded_text, speaker_ids=speaker_ids, text_lengths=text_lengths) # [B, time, encoder_out]
         
@@ -970,5 +972,5 @@ class Tacotron2(nn.Module):
         mel_outputs_postnet = self.postnet(mel_outputs)
         mel_outputs_postnet.add_(mel_outputs)
         
-        return self.parse_output(
+        return self.mask_outputs(
             [mel_outputs, mel_outputs_postnet, gate_outputs, alignments])

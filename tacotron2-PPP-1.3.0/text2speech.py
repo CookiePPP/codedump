@@ -132,11 +132,13 @@ def parse_text_into_segments(texts, split_at_quotes=True, target_segment_length=
     return texts_output
 
 
-def get_first_over_thresh(x, threshold=0.5):
+def get_first_over_thresh(x, threshold):
     """Takes [B, T] and outputs first T over threshold for each B (output.shape = [B])."""
-    x[:,x.size(1)-1] = threshold # set last to threshold just incase the output didn't finish generating.
+    device = x.device
+    x = x.clone().cpu().float() # GPU implementation of argmax() splits tensor into 32 elem chunks, each chunk is parsed forward then the outputs are collected together... backwards
+    x[:,-1] = threshold # set last to threshold just incase the output didn't finish generating.
     x[x>threshold] = threshold
-    return (x.size(1)-1)-(x.flip(dims=(1,)).argmax(dim=1))
+    return ( (x.size(1)-1)-(x.flip(dims=(1,)).argmax(dim=1)) ).to(device).int()
 
 
 class T2S:
@@ -332,7 +334,7 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=7, gate_threshold=0.1, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=0, gate_threshold=0.5, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
         """
         PARAMS:
         ...
@@ -363,6 +365,8 @@ class T2S:
         """
         assert end_mode in ['max','thresh'], f"end_mode of {end_mode} is not valid."
         assert gate_delay > -10, "gate_delay is negative."
+        assert gate_threshold > 0.0, "gate_threshold less than 0.0"
+        assert gate_threshold <= 1.0, "gate_threshold greater than 1.0"
         
         with torch.no_grad():
             # time to gen
@@ -458,7 +462,7 @@ class T2S:
                 
                 if 0:# (optional) use different speaker list for text inside quotes
                     speaker_ids = [random.choice(speakers).split("|")[2] if ('"' in text) else random.choice(narrators).split("|")[2] for text in text_batch] # pick speaker if quotemark in text, else narrator
-                    text_batch  = [text.replace('"',"") for text in text_batch] # remove quotes from text
+                text_batch  = [text.replace('"',"") for text in text_batch] # remove quotes from text
                 
                 if len(batch_speaker_names) > len(text_batch):
                     batch_speaker_names = batch_speaker_names[:len(text_batch)]
@@ -544,9 +548,8 @@ class T2S:
                         total_specs+=mel_batch_outputs.shape[0]
                         
                         # get metrics for each item
-                        gate_batch_outputs[:,:7] = 0 # ignore gate predictions for the first bit
                         if end_mode == 'thresh':
-                            output_lengths = get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)
+                            output_lengths = get_first_over_thresh(gate_batch_outputs, gate_threshold)
                         elif end_mode == 'max':
                             output_lengths = gate_batch_outputs.argmax(dim=1)
                         diagonality_batch, avg_prob_batch, enc_max_focus_batch, enc_min_focus_batch, enc_avg_focus_batch = alignment_metric(alignments_batch, input_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0), output_lengths=output_lengths)
@@ -604,11 +607,11 @@ class T2S:
                 # pickup the best attempts from each input
                 
                 # stack best output arrays into tensors for WaveGlow
-                gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0)
+                gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0.0)
                 
                 # get duration(s)
                 if end_mode == 'thresh':
-                    max_lengths = get_first_over_thresh(gate_batch_outputs, threshold=gate_threshold)+gate_delay
+                    max_lengths = get_first_over_thresh(gate_batch_outputs, gate_threshold)+gate_delay
                 elif end_mode == 'max':
                     max_lengths = gate_batch_outputs.argmax(dim=1)+gate_delay
                 max_length = torch.max(max_lengths)
@@ -620,7 +623,7 @@ class T2S:
                 if status_updates:
                     print("Running WaveGlow... ", end='')
                 # Run WaveGlow
-                audio_batch = self.waveglow.infer(mel_batch_outputs_postnet, speaker_ids=waveglow_speaker_ids, sigma=self.wg_train_sigma*0.925)
+                audio_batch = self.waveglow.infer(mel_batch_outputs_postnet, speaker_ids=waveglow_speaker_ids, sigma=self.wg_train_sigma*0.95)
                 audio_denoised_batch = self.wg_denoiser(audio_batch, strength=0.0001).squeeze(1)
                 print("audio_denoised_batch.shape =", audio_denoised_batch.shape) # debug
                 if status_updates:

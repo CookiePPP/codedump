@@ -7,7 +7,7 @@
     "tacotron": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
-        "default_model": "Tacotron2 Torchmoji v0.22.1 (Large Prenet 138K)",
+        "default_model": "Tacotron2 Torchmoji v0.22.1 (Large Prenet 150K)",
         "models": {
             "Tacotron2 Torchmoji v0.2 (Baseline 178K)": {
                 "modelpath": "outdir_truncated1/checkpoint_178000_weights_baseline"
@@ -47,6 +47,12 @@
             },
             "Tacotron2 Torchmoji v0.22.1 (Large Prenet 144K)": {
                 "modelpath": "outdir_truncated1/checkpoint_144000_weights"
+            },
+            "Tacotron2 Torchmoji v0.22.1 (Large Prenet 150K)": {
+                "modelpath": "outdir_truncated1/checkpoint_150000_weights"
+            },
+            "Tacotron2 Torchmoji v0.22.1 (Large Prenet 160K)": {
+                "modelpath": "outdir_truncated1/checkpoint_160000_weights"
             }
         }
     },
