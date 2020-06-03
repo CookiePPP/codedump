@@ -14,7 +14,7 @@
       background-color: #777;
       color: white;
       cursor: pointer;
-      padding: 18px;
+      padding: 10px;
       width: 100%;
       border: none;
       text-align: left;
@@ -156,7 +156,9 @@
                 <div class="form-group">
                     <label for="select">Text</label>
                     <textarea class="form-control" id="text_area" name="input_text" placeholder="{{sample_text}}"
-                        cols="40" rows="8">{{current_text}}</textarea></div>
+                        cols="40" rows="8" {{"maxlength="+max_input_length if max_input_length else ""}} onload="textCounter(this,'text_count');" oninput="textCounter(this,'text_count');">{{current_text}}</textarea>
+                    <input class="form-control" disabled maxlength="9" size="6" value={{max_input_length}} id="text_count" style="border: 0px; height: auto; width: auto; padding-top: 0px; float: right; background: transparent;">
+                </div>
                 <div id="btns" class="form-group">
                     <input id="btn" type="submit" class="btn btn-primary mb-2" value="Generate" />
                 </div>
@@ -185,6 +187,12 @@
                 {% endif %}
             </div>
         </div>
+        <script>
+        function textCounter(field, field2) {
+          var countfield = document.getElementById(field2);
+          countfield.value = field.maxLength - field.value.length;
+        }
+        </script>
         <script>
         // https://www.w3schools.com/howto/tryit.asp?filename=tryhow_js_collapsible_symbol
         let coll = document.getElementsByClassName("collapsible");

@@ -129,13 +129,13 @@ class WN(nn.Module):
         if rezero:
             self.alpha_i = nn.ParameterList()
         
-        start = nn.Conv1d(n_in_channels, n_channels, 1)
+        start = nn.Conv2d(n_in_channels, n_channels, (1, 1))
         start = nn.utils.weight_norm(start, name='weight')
         self.start = start
         
         # Initializing last layer to 0 makes the affine coupling layers
         # do nothing at first.  This helps with training stability
-        end = nn.Conv1d(n_channels, 2*n_in_channels, 1)
+        end = nn.Conv1d(n_channels, 2*n_in_channels, (1, 1))
         end.weight.data.zero_()
         end.bias.data.zero_()
         self.end = end
@@ -163,18 +163,26 @@ class WN(nn.Module):
                 self.cond_layers.append(cond_layer)
         
         for i in range(n_layers):
-            dilation = 2 ** i
-            padding = int((kernel_size*dilation - dilation)/2)
+            dilation_h = 1
+            dilation_w = 2 ** i
+            
+            padding_w = int((kernel_size_w*dilation - dilation)/2)
+            padding_h = 0
             if (not seperable_conv) or (kernel_size == 1):
-                in_layer = nn.Conv1d(n_channels, 2*n_channels, kernel_size,
-                                           dilation=dilation, padding=padding, padding_mode=cond_padding_mode)
+                in_layer = nn.Conv2d(n_channels, 2*n_channels, (kernel_size, kernel_height),
+                                     dilation=(dilation_h, dilation_w),
+                                     padding=(padding_h, padding_w))
                 in_layer = nn.utils.weight_norm(in_layer, name='weight')
             else:
-                depthwise = nn.Conv1d(n_channels, n_channels, kernel_size,
-                                    dilation=dilation, padding=padding, padding_mode=cond_padding_mode, groups=n_channels)
+                # todo
+                depthwise = nn.Conv2d(n_channels, n_channels, kernel_size,
+                                    dilation=dilation,
+                                    padding=(padding_h, padding_w),
+                                    groups=n_channels)
                 depthwise = nn.utils.weight_norm(depthwise, name='weight')
-                pointwise = nn.Conv1d(n_channels, 2*n_channels, 1,
-                                    dilation=dilation, padding=0)
+                pointwise = nn.Conv2d(n_channels, 2*n_channels, (1, 1),
+                                    dilation=dilation,
+                                    padding=(padding_h, 0))
                 pointwise = nn.utils.weight_norm(pointwise, name='weight')
                 in_layer = torch.nn.Sequential(depthwise, pointwise)
             self.in_layers.append(in_layer)
@@ -184,7 +192,7 @@ class WN(nn.Module):
                 res_skip_channels = 2*n_channels
             else:
                 res_skip_channels = n_channels
-            res_skip_layer = nn.Conv1d(n_channels, res_skip_channels, 1)
+            res_skip_layer = nn.Conv2d(n_channels, res_skip_channels, 1)
             res_skip_layer = nn.utils.weight_norm(res_skip_layer, name='weight')
             
             if rezero:
@@ -194,11 +202,11 @@ class WN(nn.Module):
     
     def _upsample_mels(self, cond, audio_size):
         cond = F.interpolate(cond, size=audio_size[2], mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
-        #cond = F.interpolate(cond, scale_factor=600/24, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None) # upsample by hop_length//n_group
         return cond
     
     def forward(self, audio, spect, speaker_id=None):
-        audio = self.start(audio)
+        audio = audio.unsqueeze(1) # [B, n_group//2, T//n_group] -> [B, 1, n_group//2, T//n_group]
+        audio = self.start(audio) # [B, 1, n_group//2, T//n_group] -> [B
         output = torch.zeros_like(audio)
         n_channels_tensor = torch.IntTensor([self.n_channels])
         
@@ -212,12 +220,12 @@ class WN(nn.Module):
         
         if audio.size(2) > spect.size(2): # if spectrogram hasn't been upsampled yet
             spect = self._upsample_mels(spect, audio.shape)
-            assert audio.size(2) == spect.size(2), f"audio size of {audio.size(2)} != spect size of {spect.size(2)}"
+            assert audio.size(2) == spect.size(2)
         
         for i in range(self.n_layers): # note, later layers learn lower frequency information
                                        # receptive field = 2**(n_layers-1)*kernel_size*n_group
                                        # If segment length < receptive field expect trouble learning lower frequencies as other layers try to compensate.
-                                       # Since my audio is high-passed at 40Hz, (theoretically) you can expect 48000/(40*2) = 600 samples receptive field minimum required to learn.
+                                       # Since my audio is high-passed at 40Hz, you can expect 48000/(40*2) = 600 samples receptive field minimum required to learn.
             spect_offset = i*2*self.n_channels, (i+1)*2*self.n_channels
             spec = spect[:,spect_offset[0]:spect_offset[1],:]
             acts = fused_add_tanh_sigmoid_multiply(

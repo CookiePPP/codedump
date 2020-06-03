@@ -18,7 +18,7 @@ class WaveGlow(nn.Module):
         self.win_size = win_length
         self.hop_length = hop_length
         self.n_mel_channels = n_mel_channels
-        self.upsample_first = not upsample_first
+        self.upsample_early = upsample_first
         self.upsample_mode = WN_config['upsample_mode']
         
         self.speaker_embed_dim = speaker_embed
@@ -108,7 +108,7 @@ class WaveGlow(nn.Module):
         audio = audio.view(batch_dim, -1, self.n_group).transpose(1, 2)
         
         #  Upsample spectrogram to size of audio
-        if self.upsample_first:
+        if self.upsample_early:
             cond = self._upsample_mels(cond, audio.size(2)) # [B, mels, T//n_group]
         
         #assert audio.size(2) <= cond.size(2)
@@ -137,9 +137,9 @@ class WaveGlow(nn.Module):
         return torch.cat(output_audio, 1).transpose(1, 2).contiguous().view(batch_dim, -1), logdet
     
     def _upsample_mels(self, cond, audio_size):
-        cond = F.interpolate(cond, size=audio_size, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
+        cond = F.interpolate(cond, size=audio_size[2], mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
+        #cond = F.interpolate(cond, scale_factor=600, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None) # upsample by hop_length
         return cond
-        # return self.upsampler(cond)
     
     def inverse(self, z, cond, speaker_ids=None):
         # Add speaker conditioning
@@ -161,7 +161,7 @@ class WaveGlow(nn.Module):
         z = z.view(batch_dim, -1, self.n_group).transpose(1, 2)
         
         #  Upsample spectrogram to size of audio
-        if self.upsample_first:
+        if self.upsample_early:
             cond = self._upsample_mels(cond, z.size(2)) # [B, mels, T//n_group]
         
         #assert z.size(2) <= cond.size(2)

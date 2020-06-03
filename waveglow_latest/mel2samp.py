@@ -160,7 +160,7 @@ class Mel2Samp(torch.utils.data.Dataset):
         """get audio and mel segment from an already generated spectrogram and audio."""
         mel_segment_length = int(segment_length/hop_length)+1 # 8400/600 + 1 = 15
         if audio.size(0) >= segment_length:
-            max_mel_start = int((audio.size(0)-segment_length)/hop_length) # audio.size(0)%self.hop_length is the remainder
+            max_mel_start = int((audio.size(0)-segment_length)/hop_length) - 1 # mel.size(1) - mel_segment_length
             mel_start = random.randint(0, max_mel_start)
             audio_start = mel_start*hop_length
             audio = audio[audio_start:audio_start + segment_length]

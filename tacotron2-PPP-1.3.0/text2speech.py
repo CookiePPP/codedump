@@ -393,7 +393,7 @@ class T2S:
             scores = []
             
             # Score Parameters
-            diagonality_weighting = 0.5 # 'stutter factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
+            diagonality_weighting = 0.5 # 'varibility factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
             max_focus_weighting = 1.0   # 'stuck factor', a penalty for clips that spend execisve time on the same letter.
             min_focus_weighting = 0.25  # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
             avg_focus_weighting = 1.0   # 'skip factor', a penalty for skipping very large parts of the input text
@@ -593,7 +593,7 @@ class T2S:
                             for k, (mel_outputs, mel_outputs_postnet, gate_outputs, alignments, diagonality, avg_prob, enc_max_focus, enc_min_focus, enc_avg_focus) in enumerate(sametext_batch):
                                 # factors that make up score
                                 weighted_score =  avg_prob.item() # general alignment quality
-                                diagonality_punishment = (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # consistent pace
+                                diagonality_punishment = (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # smooth pacing
                                 max_focus_punishment = max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
                                 min_focus_punishment = max(0.4-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
                                 avg_focus_punishment = max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
@@ -705,7 +705,7 @@ class T2S:
                 audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
                 time_to_gen = round(time.time()-start_time,3)
                 if show_time_to_gen:
-                    print(f"Took {time_to_gen}s to generate {audio_seconds_generated}s of audio. (best of {tries.sum().astype('int')} tries)")
+                    print(f"Generated {audio_seconds_generated}s of audio in {time_to_gen}s wall time - so far. (best of {tries.sum().astype('int')} tries this pass)")
                 
                 print("\n") # seperate each pass
             

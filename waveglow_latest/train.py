@@ -262,7 +262,7 @@ def multiLR(model):
     return model_parameters, (in_layers_offsets, res_skip_layers_offsets, start_offsets, end_offsets, cond_layer_offsets)
     
 def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
-          sigma, iters_per_checkpoint, batch_size, seed, fp16_run,
+          sigma, loss_empthasis, iters_per_checkpoint, batch_size, seed, fp16_run,
           checkpoint_path, with_tensorboard, logdirname, datedlogdir):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -285,7 +285,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
         else:
             from glow import WaveGlow, WaveGlowLoss
     
-    criterion = WaveGlowLoss(sigma)
+    criterion = WaveGlowLoss(sigma, loss_empthasis)
     model = WaveGlow(**waveglow_config).cuda()
     #=====START: ADDED FOR DISTRIBUTED======
     if num_gpus > 1:
@@ -343,7 +343,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     iteration = 0
     if checkpoint_path != "":
         
-        warm_start = 1 # WARM START THE MODEL AND RESET ANY INVALID LAYERS
+        warm_start = 0 # WARM START THE MODEL AND RESET ANY INVALID LAYERS
         
         model, optimizer, iteration, scheduler = load_checkpoint(checkpoint_path, model,
                                                       optimizer, scheduler, fp16_run, warm_start=warm_start)

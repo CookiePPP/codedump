@@ -14,6 +14,9 @@ tacotron_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"
 waveglow_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['waveglow']['models'].items())]
 infer_dir = "server_infer"
 
+# misc html config
+max_input_length = t2s.conf['html_max_input_len']
+
 # default html config
 sample_tacotron = t2s.conf['tacotron']['default_model']
 sample_waveglow = t2s.conf['waveglow']['default_model']
@@ -73,8 +76,11 @@ def texttospeech():
         if t2s.wg_current != wg_current:
             t2s.update_wg(wg_current)
         
-        # CRLF to LF
+        # (Text) CRLF to LF
         text = text.replace('\r\n','\n')
+        
+        # (Text) Max Lenght Limit
+        text = text[:int(max_input_length)]
         
         # generate an audio file from the inputs
         filename, gen_time, gen_dur, total_specs, n_passes, avg_score = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s, textseg_len_target)
@@ -83,6 +89,7 @@ def texttospeech():
         # send updated webpage back to client along with page to the file
         return render_template('main.html',
                                 use_localhost=use_localhost,
+                                max_input_length=max_input_length,
                                 tacotron_conf=tacotron_conf,
                                 tt_current=tt_current,
                                 tt_len=len(tacotron_conf),
@@ -119,6 +126,7 @@ def texttospeech():
 def show_entries():
     return render_template('main.html',
                             use_localhost=use_localhost,
+                            max_input_length=max_input_length,
                             tacotron_conf=tacotron_conf,
                             tt_current=sample_tacotron,
                             tt_len=len(tacotron_conf),
