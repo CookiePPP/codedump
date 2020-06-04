@@ -685,14 +685,6 @@ class T2S:
                     counter+=1
                     audio_len+=audio_end
                 
-                if self.conf['show_inference_progress']:
-                    time_elapsed = time.time()-show_inference_progress_start
-                    time_per_clip = time_elapsed/(text_index+1)
-                    remaining_files = (total_len-(text_index+1))
-                    eta_finish = (remaining_files*time_per_clip)/60
-                    print(f"{text_index}/{total_len}, {eta_finish:.2f}mins remaining.")
-                    del time_per_clip, eta_finish, remaining_files, time_elapsed
-                
                 if self.conf['show_inference_alignment_scores']:
                     for k, bs in enumerate(best_score):
                         print(f"Input_Str  {k}: '{text_batch[k]}'")
@@ -701,6 +693,14 @@ class T2S:
                 
                 for score in best_score:
                     scores+=[score,]
+                
+                if self.conf['show_inference_progress']:
+                    time_elapsed = time.time()-show_inference_progress_start
+                    time_per_clip = time_elapsed/(text_index+1)
+                    remaining_files = (total_len-(text_index+1))
+                    eta_finish = (remaining_files*time_per_clip)/60
+                    print(f"{text_index}/{total_len}, {eta_finish:.2f}mins remaining.")
+                    del time_per_clip, eta_finish, remaining_files, time_elapsed
                 
                 audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
                 time_to_gen = round(time.time()-start_time,3)
