@@ -114,7 +114,7 @@ class WN(nn.Module):
     size reset.  The dilation only doubles on each layer
     """
     def __init__(self, n_in_channels, cond_in_channels, cond_layers, cond_hidden_channels, cond_kernel_size, cond_padding_mode, seperable_conv, merge_res_skip, upsample_mode, n_layers, n_channels, # audio_channels, mel_channels*n_group, n_layers, n_conv_channels
-                 kernel_size, speaker_embed_dim, rezero): # bool: ReZero
+                 kernel_size, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None): # bool: ReZero
         super(WN, self).__init__()
         assert(kernel_size % 2 == 1)
         assert(n_channels % 2 == 0)
@@ -161,6 +161,21 @@ class WN(nn.Module):
                 cond_layer = nn.Conv1d(indim, outim, cond_kernel_size, padding=cond_pad, padding_mode=cond_padding_mode)# (in_channels, out_channels, kernel_size)
                 cond_layer = nn.utils.weight_norm(cond_layer, name='weight')
                 self.cond_layers.append(cond_layer)
+            
+            cond_activation_func = cond_activation_func.lower()
+            if cond_activation_func == 'none':
+                pass
+            elif cond_activation_func == 'lrelu':
+                self.cond_activation_func = torch.nn.functional.relu
+            elif cond_activation_func == 'relu':
+                assert negative_slope, "negative_slope not defined in wn_config"
+                self.cond_activation_func = torch.nn.LeakyReLU(negative_slope=negative_slope, inplace=False)
+            elif cond_activation_func == 'tanh':
+                self.cond_activation_func = torch.nn.functional.tanh
+            elif cond_activation_func == 'sigmoid':
+                self.cond_activation_func = torch.nn.functional.sigmoid
+            else:
+                raise NotImplementedError
         
         for i in range(n_layers):
             dilation = 2 ** i
@@ -199,7 +214,8 @@ class WN(nn.Module):
     
     def forward(self, audio, spect, speaker_id=None):
         audio = self.start(audio)
-        output = torch.zeros_like(audio)
+        if not self.merge_res_skip:
+            output = torch.zeros_like(audio) # output and audio are seperate Tensors
         n_channels_tensor = torch.IntTensor([self.n_channels])
         
         if self.speaker_embed_dim and speaker_id != None: # add speaker embeddings to spectrogram (channel dim)
@@ -209,6 +225,8 @@ class WN(nn.Module):
         
         for layer in self.cond_layers:
             spect = layer(spect)
+            if hasattr(self, 'cond_activation_func'):
+                spect = self.cond_activation_func(spect)
         
         if audio.size(2) > spect.size(2): # if spectrogram hasn't been upsampled yet
             spect = self._upsample_mels(spect, audio.shape)
@@ -231,13 +249,16 @@ class WN(nn.Module):
                 res_skip_acts = self.res_skip_layers[i](acts)
             
             if self.merge_res_skip:
-                output = audio = res_skip_acts
+                audio = audio + res_skip_acts
             else:
                 if i < self.n_layers - 1:
                     audio = audio + res_skip_acts[:,:self.n_channels,:]
                     output = output + res_skip_acts[:,self.n_channels:,:]
                 else:
                     output = output + res_skip_acts
+        
+        if self.merge_res_skip:
+            output = audio
         
         return self.end(output).chunk(2, 1)
 

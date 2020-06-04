@@ -8,7 +8,7 @@ from efficient_modules import AffineCouplingBlock, InvertibleConv1x1
 
 class WaveGlow(nn.Module):
     def __init__(self, yoyo, yoyo_WN, n_mel_channels, n_flows, n_group, n_early_every,
-                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length):
+                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None):
         super(WaveGlow, self).__init__()
         assert(n_group % 2 == 0)
         self.n_flows = n_flows
@@ -32,6 +32,10 @@ class WaveGlow(nn.Module):
         if self.cond_residual: # override conditional output size if using residuals
             cond_output_channels = self.n_mel_channels+self.speaker_embed_dim
         
+        self.cond_res_rezero = cond_res_rezero
+        if self.cond_res_rezero:
+            self.alpha = nn.Parameter(torch.rand(1)*0.002+0.001) # rezero initial state (0.001±0.001)
+        
         self.cond_layers = nn.ModuleList()
         if cond_layers:
             # messy initialization for arbitrary number of layers, input dims and output dims
@@ -48,6 +52,21 @@ class WaveGlow(nn.Module):
                 cond_layer = nn.utils.weight_norm(cond_layer, name='weight')
                 self.cond_layers.append(cond_layer)
             WN_cond_channels = cond_output_channels
+            
+            cond_activation_func = cond_activation_func.lower()
+            if cond_activation_func == 'none':
+                pass
+            elif cond_activation_func == 'lrelu':
+                self.cond_activation_func = torch.nn.functional.relu
+            elif cond_activation_func == 'relu':
+                assert negative_slope, "negative_slope not defined in wn_config"
+                self.cond_activation_func = torch.nn.LeakyReLU(negative_slope=negative_slope, inplace=False)
+            elif cond_activation_func == 'tanh':
+                self.cond_activation_func = torch.nn.functional.tanh
+            elif cond_activation_func == 'sigmoid':
+                self.cond_activation_func = torch.nn.functional.sigmoid
+            else:
+                raise NotImplementedError
         else:
             WN_cond_channels = self.n_mel_channels+self.speaker_embed_dim
         
@@ -98,6 +117,11 @@ class WaveGlow(nn.Module):
         cond_res = cond
         for layer in self.cond_layers:
             cond_res = layer(cond_res)
+            if hasattr(self, 'cond_activation_func'):
+                cond_res = self.cond_activation_func(cond_res)
+        
+        if hasattr(self, 'alpha'):
+            cond_res *= self.alpha # reZero modifier
         
         if self.cond_residual:
             cond = cond + cond_res # adjust the original input by a residual
@@ -151,6 +175,11 @@ class WaveGlow(nn.Module):
         cond_res = cond
         for layer in self.cond_layers:
             cond_res = layer(cond_res)
+            if hasattr(self, 'cond_activation_func'):
+                cond_res = self.cond_activation_func(cond_res)
+        
+        if hasattr(self, 'alpha'):
+            cond_res *= self.alpha # reZero modifier
         
         if self.cond_residual:
             cond += cond_res # adjust the original input by a residual

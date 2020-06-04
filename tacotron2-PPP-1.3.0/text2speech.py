@@ -611,9 +611,9 @@ class T2S:
                                     raise StopIteration
                         
                         if np.amin(tries) < (max_attempts-1):
-                            print('Target score not reached. Retrying.')
+                            print(f'Minimum score of {np.amin(best_score)} is less than Target score of {target_score}. Retrying.')
                         elif np.amin(best_score) < absolutely_required_score:
-                            print('Score less than absolutely required score. Retrying extra.')
+                            print(f"Minimum score of {np.amin(best_score)} is less than 'Absolutely Required score' of {absolutely_required_score}. Retrying.")
                 except StopIteration:
                     del batch
                     if status_updates: print("Done")

@@ -96,12 +96,13 @@ def apply_gradient_allreduce(module):
         module.warn_on_half = True
     else:
         module.warn_on_half = True if dist._backend == dist.dist_backend.GLOO else False
-
+    
     for p in module.state_dict().values():
         if not torch.is_tensor(p):
             continue
-        dist.broadcast(p.contiguous(), 0)
-
+        p = p.contiguous()
+        dist.broadcast(p, 0)
+    
     def allreduce_params():
         if(module.needs_reduction):
             module.needs_reduction = False
