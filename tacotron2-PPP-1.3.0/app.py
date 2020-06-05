@@ -12,7 +12,6 @@ t2s = T2S()
 speakers = [x for x in list(t2s.tt_sp_name_lookup.keys()) if "(Music)" not in x]
 tacotron_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['tacotron']['models'].items())]
 waveglow_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['waveglow']['models'].items())]
-infer_dir = "server_infer"
 
 # misc html config
 max_input_length = t2s.conf['html_max_input_len']
@@ -163,7 +162,7 @@ def show_entries():
 def streammp3(voice):
     print("AUDIO_REQUEST: ", request)
     def generate():
-        with open(os.path.join(infer_dir, voice), "rb") as fwav:# open audio_path
+        with open(os.path.join(t2s.conf['output_directory'], voice), "rb") as fwav:# open audio_path
             data = fwav.read(1024)
             while data:
                 yield data
@@ -173,7 +172,7 @@ def streammp3(voice):
     if stream_audio: # don't have seeking working atm
         return Response(generate(), mimetype="audio/wav")
     else:
-        return send_from_directory(infer_dir, voice)
+        return send_from_directory(t2s.conf['output_directory'], voice)
 
 #launch a Tornado server with HTTPServer.
 if __name__ == "__main__":

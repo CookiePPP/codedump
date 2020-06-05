@@ -350,20 +350,20 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=0, gate_threshold=0.5, outdir=r'server_infer', filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=0, gate_threshold=0.5, filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
         """
         PARAMS:
         ...
         gate_delay
-            default: 7
+            default: 0
             options: int ( 0 -> inf )
             info: a modifier for when spectrograms are cut off.
                   This would allow you to add silence to the end of a clip without an unnatural fade-out.
-                  The default of 7 will give 0.0875 seconds of delay before ending the clip.
+                  7 will give 0.0875 seconds of delay before ending the clip.
                   If this param is set too high then the model will try to start speaking again
                   despite not having any text left to speak, therefore keeping it low is typical.
         gate_threshold
-            default: 0.1
+            default: 0.5
             options: float ( 0.0 -> 1.0 )
             info: used to control when Tacotron2 will stop generating new mel frames.
                   This will effect speed of generation as the model will generate
@@ -373,7 +373,7 @@ class T2S:
                   when the audio from the best spectrograms should be cut off.
         ...
         end_mode
-            default: 'max'
+            default: 'thresh'
             options: ['max','thresh']
             info: controls where the spectrograms are cut off.
                   'max' will cut the spectrograms off at the highest gate output, 
@@ -383,6 +383,8 @@ class T2S:
         assert gate_delay > -10, "gate_delay is negative."
         assert gate_threshold > 0.0, "gate_threshold less than 0.0"
         assert gate_threshold <= 1.0, "gate_threshold greater than 1.0"
+        os.makedirs(self.conf["working_directory"], exist_ok=True)
+        os.makedirs(self.conf["output_directory"], exist_ok=True)
         
         with torch.no_grad():
             # time to gen
@@ -663,7 +665,7 @@ class T2S:
                     
                     # save audio
                     filename = f"{filename_prefix}_{counter//300:04}_{counter:06}.wav"
-                    save_path = os.path.join(outdir, filename)
+                    save_path = os.path.join(self.conf['working_directory'], filename)
                     
                     # add silence to clips (ignore last clip)
                     if cat_silence_s:
@@ -711,7 +713,7 @@ class T2S:
             
             # ------ merge clips ------ #
             output_filename = f"{filename_prefix}_output"
-            n_audio_batches = -(-len( glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) ) // 300)# get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
+            n_audio_batches = -(-len( glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_*_*.wav")) ) // 300)# get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
             
             running_fsize = 0
             fpaths = []
@@ -719,12 +721,12 @@ class T2S:
             for i in range(n_audio_batches):
                 # merge batch of 300 files together
                 print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
-                fpath = os.path.join(outdir, f"{filename_prefix}_concat_{i:04}.wav")
-                os.system(f'sox {os.path.join(outdir, f"{filename_prefix}_{i:04}_*.wav")} -b 16 {fpath}')
+                fpath = os.path.join(self.conf['working_directory'], f"{filename_prefix}_concat_{i:04}.wav")
+                os.system(f'sox {os.path.join(self.conf["working_directory"], f"{filename_prefix}_{i:04}_*.wav")} -b 16 {fpath}')
                 
                 # delete the original 300 files
                 print("Cleaning up remaining temp files... ", end="")
-                tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}_{i:04}_*.wav")) if "output" not in fp]
+                tmp_files = [fp for fp in glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_{i:04}_*.wav")) if "output" not in fp]
                 _ = [os.remove(fp) for fp in tmp_files]
                 print("Done")
                 
@@ -738,7 +740,7 @@ class T2S:
                     if output_extension[0] != '.':
                         output_extension = f".{output_extension}"
                     out_name = f"{output_filename}_{out_count:02}{output_extension}"
-                    out_path = os.path.join(outdir, out_name)
+                    out_path = os.path.join(self.conf['output_directory'], out_name)
                     os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
                     
                     if running_fsize >= (os.stat(out_path).st_size - 1024): # if output seems to have correctly generated.
