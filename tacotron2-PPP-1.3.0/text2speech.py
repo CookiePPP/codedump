@@ -350,20 +350,20 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=0, gate_threshold=0.5, filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=4, gate_threshold=0.6, filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
         """
         PARAMS:
         ...
         gate_delay
-            default: 0
+            default: 4
             options: int ( 0 -> inf )
             info: a modifier for when spectrograms are cut off.
                   This would allow you to add silence to the end of a clip without an unnatural fade-out.
-                  7 will give 0.0875 seconds of delay before ending the clip.
+                  8 will give 0.1 seconds of delay before ending the clip.
                   If this param is set too high then the model will try to start speaking again
                   despite not having any text left to speak, therefore keeping it low is typical.
         gate_threshold
-            default: 0.5
+            default: 0.6
             options: float ( 0.0 -> 1.0 )
             info: used to control when Tacotron2 will stop generating new mel frames.
                   This will effect speed of generation as the model will generate
