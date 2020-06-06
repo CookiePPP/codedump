@@ -57,7 +57,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         # SHUFFLE audiopaths
         random.seed(hparams.seed)
         self.random_seed = hparams.seed
-        #random.shuffle(self.audiopaths_and_text)
+        random.shuffle(self.audiopaths_and_text)
         
         self.batch_size = hparams.batch_size if speaker_ids is None else hparams.val_batch_size
         n_gpus = hparams.n_gpus
@@ -66,7 +66,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.truncated_length = hparams.truncated_length # frames
         
         # -------------- PREDICT LENGTH (TBPTT) --------------
-        if TBPTT:
+        if hparams.use_TBPTT:
             self.audio_lengths = torch.tensor([self.get_mel(x[0]).shape[1] for x in self.audiopaths_and_text]) # get the length of every file (the long way)
         else:
             self.audio_lengths = torch.tensor([self.truncated_length-1 for x in self.audiopaths_and_text]) # use dummy lengths
@@ -85,6 +85,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.update_dataloader_indexes()
     
     def update_dataloader_indexes(self):
+        """Simulate the entire epoch and plan in advance which spectrograms will be processed by what when."""
         self.dataloader_indexes = []
         
         batch_remaining_lengths = self.audio_lengths[:self.total_batch_size]
@@ -116,7 +117,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         
         self.len = len(self.dataloader_indexes)
     
-    def checkdataset(self, verbose=False):
+    def checkdataset(self, verbose=False): # TODO, change for list comprehension which is a few magnitudes faster.
         print("Checking dataset files... ", end="")
         audiopaths_length = len(self.audiopaths_and_text)
         filtered_chars=["☺","␤"]

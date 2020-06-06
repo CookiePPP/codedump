@@ -12,7 +12,9 @@ t2s = T2S()
 speakers = [x for x in list(t2s.tt_sp_name_lookup.keys()) if "(Music)" not in x]
 tacotron_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['tacotron']['models'].items())]
 waveglow_conf = [[name,details] if os.path.exists(details['modelpath']) else [f"[MISSING]{name}",details] for name, details in list(t2s.conf['waveglow']['models'].items())]
-infer_dir = "server_infer"
+
+# misc html config
+max_input_length = t2s.conf['html_max_input_len']
 
 # default html config
 sample_tacotron = t2s.conf['tacotron']['default_model']
@@ -21,16 +23,17 @@ sample_current_text = "" # default text entered
 sample_background_text = "Enter text." # this is the faded out text when nothing has been entered
 sample_speaker = ["(Show) My Little Pony_Twilight",]
 sample_style_mode = "torchmoji_hidden"
-sample_textseg_mode="segment_by_line"
+sample_textseg_mode="segment_by_sentencequote"
 sample_batch_mode="nochange"
 sample_max_attempts=256
-sample_max_duration_s=12
+sample_max_duration_s=20
 sample_batch_size=256
-sample_dyna_max_duration_s = 0.3
+sample_dyna_max_duration_s = 0.10
 sample_use_arpabet = "on"
-sample_target_score = 0.8
+sample_target_score = 0.75
 sample_multispeaker_mode = "random"
 sample_cat_silence_s = 0.1
+sample_textseg_len_target = 120
 
 use_localhost = t2s.conf['localhost']
 
@@ -59,6 +62,7 @@ def texttospeech():
         target_score = float(result.get('input_target_score'))
         multispeaker_mode = result.get('input_multispeaker_mode')
         cat_silence_s = float(result.get('input_cat_silence_s'))
+        textseg_len_target = int(result.get('input_textseg_len_target'))
         wg_current = result.get('input_wg_current')
         tt_current = result.get('input_tt_current')
         print(result)
@@ -71,13 +75,20 @@ def texttospeech():
         if t2s.wg_current != wg_current:
             t2s.update_wg(wg_current)
         
+        # (Text) CRLF to LF
+        text = text.replace('\r\n','\n')
+        
+        # (Text) Max Lenght Limit
+        text = text[:int(max_input_length)]
+        
         # generate an audio file from the inputs
-        filename, gen_time, gen_dur, total_specs, n_passes = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s)
-        print(f"GENERATED {filename}")
+        filename, gen_time, gen_dur, total_specs, n_passes, avg_score = t2s.infer(text, speaker, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, multispeaker_mode, cat_silence_s, textseg_len_target)
+        print(f"GENERATED {filename}\n\n")
         
         # send updated webpage back to client along with page to the file
         return render_template('main.html',
                                 use_localhost=use_localhost,
+                                max_input_length=max_input_length,
                                 tacotron_conf=tacotron_conf,
                                 tt_current=tt_current,
                                 tt_len=len(tacotron_conf),
@@ -104,14 +115,17 @@ def texttospeech():
                                 gen_dur=round(gen_dur,2),
                                 total_specs=total_specs,
                                 n_passes=n_passes,
+                                avg_score=round(avg_score,3),
                                 multispeaker_mode=multispeaker_mode,
-                                cat_silence_s=cat_silence_s,)
+                                cat_silence_s=cat_silence_s,
+                                textseg_len_target=textseg_len_target,)
 
 #Route to render GUI
 @app.route('/')
 def show_entries():
     return render_template('main.html',
                             use_localhost=use_localhost,
+                            max_input_length=max_input_length,
                             tacotron_conf=tacotron_conf,
                             tt_current=sample_tacotron,
                             tt_len=len(tacotron_conf),
@@ -138,15 +152,17 @@ def show_entries():
                             gen_dur="",
                             total_specs="",
                             n_passes="",
+                            avg_score="",
                             multispeaker_mode=sample_multispeaker_mode,
-                            cat_silence_s=sample_cat_silence_s,)
+                            cat_silence_s=sample_cat_silence_s,
+                            textseg_len_target=sample_textseg_len_target,)
 
 #Route to stream music
 @app.route('/<voice>', methods=['GET'])
 def streammp3(voice):
     print("AUDIO_REQUEST: ", request)
     def generate():
-        with open(os.path.join(infer_dir, voice), "rb") as fwav:# open audio_path
+        with open(os.path.join(t2s.conf['output_directory'], voice), "rb") as fwav:# open audio_path
             data = fwav.read(1024)
             while data:
                 yield data
@@ -156,7 +172,7 @@ def streammp3(voice):
     if stream_audio: # don't have seeking working atm
         return Response(generate(), mimetype="audio/wav")
     else:
-        return send_from_directory(infer_dir, voice)
+        return send_from_directory(t2s.conf['output_directory'], voice)
 
 #launch a Tornado server with HTTPServer.
 if __name__ == "__main__":

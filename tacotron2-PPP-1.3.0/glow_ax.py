@@ -114,7 +114,7 @@ class WN(nn.Module):
     size reset.  The dilation only doubles on each layer
     """
     def __init__(self, n_in_channels, cond_in_channels, cond_layers, cond_hidden_channels, cond_kernel_size, cond_padding_mode, seperable_conv, merge_res_skip, upsample_mode, n_layers, n_channels, # audio_channels, mel_channels*n_group, n_layers, n_conv_channels
-                 kernel_size, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None): # bool: ReZero
+                 kernel_size, speaker_embed_dim, rezero): # bool: ReZero
         super(WN, self).__init__()
         assert(kernel_size % 2 == 1)
         assert(n_channels % 2 == 0)
@@ -161,32 +161,17 @@ class WN(nn.Module):
                 cond_layer = nn.Conv1d(indim, outim, cond_kernel_size, padding=cond_pad, padding_mode=cond_padding_mode)# (in_channels, out_channels, kernel_size)
                 cond_layer = nn.utils.weight_norm(cond_layer, name='weight')
                 self.cond_layers.append(cond_layer)
-            
-            cond_activation_func = cond_activation_func.lower()
-            if cond_activation_func == 'none':
-                pass
-            elif cond_activation_func == 'lrelu':
-                self.cond_activation_func = torch.nn.functional.relu
-            elif cond_activation_func == 'relu':
-                assert negative_slope, "negative_slope not defined in wn_config"
-                self.cond_activation_func = torch.nn.LeakyReLU(negative_slope=negative_slope, inplace=False)
-            elif cond_activation_func == 'tanh':
-                self.cond_activation_func = torch.nn.functional.tanh
-            elif cond_activation_func == 'sigmoid':
-                self.cond_activation_func = torch.nn.functional.sigmoid
-            else:
-                raise NotImplementedError
         
         for i in range(n_layers):
             dilation = 2 ** i
             padding = int((kernel_size*dilation - dilation)/2)
             if (not seperable_conv) or (kernel_size == 1):
                 in_layer = nn.Conv1d(n_channels, 2*n_channels, kernel_size,
-                                           dilation=dilation, padding=padding, padding_mode=cond_padding_mode)
+                                           dilation=dilation, padding=padding)
                 in_layer = nn.utils.weight_norm(in_layer, name='weight')
             else:
                 depthwise = nn.Conv1d(n_channels, n_channels, kernel_size,
-                                    dilation=dilation, padding=padding, padding_mode=cond_padding_mode, groups=n_channels)
+                                    dilation=dilation, padding=padding, groups=n_channels)
                 depthwise = nn.utils.weight_norm(depthwise, name='weight')
                 pointwise = nn.Conv1d(n_channels, 2*n_channels, 1,
                                     dilation=dilation, padding=0)
@@ -209,13 +194,11 @@ class WN(nn.Module):
     
     def _upsample_mels(self, cond, audio_size):
         cond = F.interpolate(cond, size=audio_size[2], mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
-        #cond = F.interpolate(cond, scale_factor=600/24, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None) # upsample by hop_length//n_group
         return cond
     
     def forward(self, audio, spect, speaker_id=None):
         audio = self.start(audio)
-        if not self.merge_res_skip:
-            output = torch.zeros_like(audio) # output and audio are seperate Tensors
+        output = torch.zeros_like(audio)
         n_channels_tensor = torch.IntTensor([self.n_channels])
         
         if self.speaker_embed_dim and speaker_id != None: # add speaker embeddings to spectrogram (channel dim)
@@ -225,17 +208,15 @@ class WN(nn.Module):
         
         for layer in self.cond_layers:
             spect = layer(spect)
-            if hasattr(self, 'cond_activation_func'):
-                spect = self.cond_activation_func(spect)
         
         if audio.size(2) > spect.size(2): # if spectrogram hasn't been upsampled yet
             spect = self._upsample_mels(spect, audio.shape)
-            assert audio.size(2) == spect.size(2), f"audio size of {audio.size(2)} != spect size of {spect.size(2)}"
+            assert audio.size(2) == spect.size(2)
         
         for i in range(self.n_layers): # note, later layers learn lower frequency information
                                        # receptive field = 2**(n_layers-1)*kernel_size*n_group
                                        # If segment length < receptive field expect trouble learning lower frequencies as other layers try to compensate.
-                                       # Since my audio is high-passed at 40Hz, (theoretically) you can expect 48000/(40*2) = 600 samples receptive field minimum required to learn.
+                                       # Since my audio is high-passed at 40Hz, you can expect 48000/(40*2) = 600 samples receptive field minimum required to learn.
             spect_offset = i*2*self.n_channels, (i+1)*2*self.n_channels
             spec = spect[:,spect_offset[0]:spect_offset[1],:]
             acts = fused_add_tanh_sigmoid_multiply(
@@ -249,16 +230,13 @@ class WN(nn.Module):
                 res_skip_acts = self.res_skip_layers[i](acts)
             
             if self.merge_res_skip:
-                audio = audio + res_skip_acts
+                output = audio = res_skip_acts
             else:
                 if i < self.n_layers - 1:
                     audio = audio + res_skip_acts[:,:self.n_channels,:]
                     output = output + res_skip_acts[:,self.n_channels:,:]
                 else:
                     output = output + res_skip_acts
-        
-        if self.merge_res_skip:
-            output = audio
         
         return self.end(output).chunk(2, 1)
 

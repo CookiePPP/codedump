@@ -14,7 +14,7 @@
       background-color: #777;
       color: white;
       cursor: pointer;
-      padding: 18px;
+      padding: 10px;
       width: 100%;
       border: none;
       text-align: left;
@@ -71,7 +71,7 @@
                     <label for="select">Text --> Spectogram Model</label>
                     <select name="input_tt_current" class="form-control">
                         {%for i in range(0, tt_len)%}
-                        <option value='{{tacotron_conf[i][0]}}' {{ 'selected' if tt_current == tacotron_conf[i][0] else '' }}>{{tacotron_conf[i][0]}}</option>
+                        <option value='{{tacotron_conf[i][0][9:] if "[MISSING]" in tacotron_conf[i][0] else tacotron_conf[i][0]}}' {{ 'selected' if tt_current == tacotron_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in tacotron_conf[i][0] else ''}}>{{tacotron_conf[i][0]}}</option>
                         {%endfor%}
                     </select></div>
                 <button class="collapsible" type="button">Advanced Options</button>
@@ -98,13 +98,13 @@
                         </div>
                         <div class="form-group">
                             <label for="select">Max Duration per Input (Seconds)</label>
-                            <label style="zoom: 0.7;">(This will control the amount of VRAM used and will kill collapsed clips faster - therefore run faster on batched inputs.)</label>
+                            <label style="zoom: 0.7;">(This will control the maximum amount of VRAM used. Decrease 'Input Segmentation Target Length' or Increase this if you notice longer text inputs getting cut off before they can finish.)</label>
                             <input style="width: -webkit-fill-available;" class="form-control" value="{{max_duration_s}}" type="number" min="0.1" step="0.1" name="input_max_duration_s">
                         </div>
                         <div class="form-group">
                             <label for="select">Dynamic Max Duration Scaler</label>
-                            <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.3 gives 300 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
-                            <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.1" step="0.0125" name="input_dyna_max_duration_s">
+                            <label style="zoom: 0.7;">(Decrease max duration for small inputs. e.g: 0.2 gives 200 milliseconds per letter you input till it hits the <i>other</i> Max Duration which is the upper upper limit.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{dyna_max_duration_s}}" type="number" min="0.05" step="0.0125" name="input_dyna_max_duration_s">
                         </div>
                         <div class="form-group">
                             <label for="select">Max Attempts</label>
@@ -132,6 +132,11 @@
                                 <option value="segment_by_sentencequote" {{ 'selected' if textseg_mode == 'segment_by_sentencequote' else '' }}>Split text by sentences and quotes</option>
                             </select></div>
                         <div class="form-group">
+                            <label for="select">Input Segmentation Target Length</label>
+                            <label style="zoom: 0.7;">(Applies to 'Split text by sentence' and similar. Will merge neighbouring sentences to get as close to Target Length as possible without going over.)</label>
+                            <input style="width: -webkit-fill-available;" class="form-control" value="{{textseg_len_target}}" type="number" max="9999" min="50" step="1" name="input_textseg_len_target">
+                            </select></div>
+                        <div class="form-group">
                             <label for="select">Style Mode</label>
                             <select name="input_style_mode" class="form-control">
                                 <option value="torchmoji_hidden" {{ 'selected' if style_mode == 'torchmoji_hidden' else '' }}>Infer emotion from text via TorchMoji</option>
@@ -151,7 +156,9 @@
                 <div class="form-group">
                     <label for="select">Text</label>
                     <textarea class="form-control" id="text_area" name="input_text" placeholder="{{sample_text}}"
-                        cols="40" rows="8">{{current_text}}</textarea></div>
+                        cols="40" rows="8" {{"maxlength="+max_input_length if max_input_length else ""}} onload="textCounter(this,'text_count');" oninput="textCounter(this,'text_count');">{{current_text}}</textarea>
+                    <input class="form-control" disabled maxlength="9" size="6" value={{max_input_length}} id="text_count" style="border: 0px; height: auto; width: auto; padding-top: 0px; float: right; background: transparent;">
+                </div>
                 <div id="btns" class="form-group">
                     <input id="btn" type="submit" class="btn btn-primary mb-2" value="Generate" />
                 </div>
@@ -175,10 +182,17 @@
                     </audio>
                     {% endif %}
                     <p style="zoom: 0.7;">Took {{gen_time}} seconds to generate {{gen_dur}} seconds of audio (generated {{total_specs}} total spectrograms from {{n_passes}} passes)</p>
+                    <p style="zoom: 0.7;">Average score was {{avg_score}}</p>
                 </div>
                 {% endif %}
             </div>
         </div>
+        <script>
+        function textCounter(field, field2) {
+          var countfield = document.getElementById(field2);
+          countfield.value = field.maxLength - field.value.length;
+        }
+        </script>
         <script>
         // https://www.w3schools.com/howto/tryit.asp?filename=tryhow_js_collapsible_symbol
         let coll = document.getElementsByClassName("collapsible");

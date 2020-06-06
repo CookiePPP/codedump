@@ -8,7 +8,7 @@ from efficient_modules import AffineCouplingBlock, InvertibleConv1x1
 
 class WaveGlow(nn.Module):
     def __init__(self, yoyo, yoyo_WN, n_mel_channels, n_flows, n_group, n_early_every,
-                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None):
+                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length):
         super(WaveGlow, self).__init__()
         assert(n_group % 2 == 0)
         self.n_flows = n_flows
@@ -18,7 +18,7 @@ class WaveGlow(nn.Module):
         self.win_size = win_length
         self.hop_length = hop_length
         self.n_mel_channels = n_mel_channels
-        self.upsample_early = upsample_first
+        self.upsample_first = not upsample_first
         self.upsample_mode = WN_config['upsample_mode']
         
         self.speaker_embed_dim = speaker_embed
@@ -31,10 +31,6 @@ class WaveGlow(nn.Module):
         self.cond_residual = cond_residual
         if self.cond_residual: # override conditional output size if using residuals
             cond_output_channels = self.n_mel_channels+self.speaker_embed_dim
-        
-        self.cond_res_rezero = cond_res_rezero
-        if self.cond_res_rezero:
-            self.alpha = nn.Parameter(torch.rand(1)*0.002+0.001) # rezero initial state (0.001±0.001)
         
         self.cond_layers = nn.ModuleList()
         if cond_layers:
@@ -52,21 +48,6 @@ class WaveGlow(nn.Module):
                 cond_layer = nn.utils.weight_norm(cond_layer, name='weight')
                 self.cond_layers.append(cond_layer)
             WN_cond_channels = cond_output_channels
-            
-            cond_activation_func = cond_activation_func.lower()
-            if cond_activation_func == 'none':
-                pass
-            elif cond_activation_func == 'lrelu':
-                self.cond_activation_func = torch.nn.functional.relu
-            elif cond_activation_func == 'relu':
-                assert negative_slope, "negative_slope not defined in wn_config"
-                self.cond_activation_func = torch.nn.LeakyReLU(negative_slope=negative_slope, inplace=False)
-            elif cond_activation_func == 'tanh':
-                self.cond_activation_func = torch.nn.functional.tanh
-            elif cond_activation_func == 'sigmoid':
-                self.cond_activation_func = torch.nn.functional.sigmoid
-            else:
-                raise NotImplementedError
         else:
             WN_cond_channels = self.n_mel_channels+self.speaker_embed_dim
         
@@ -117,11 +98,6 @@ class WaveGlow(nn.Module):
         cond_res = cond
         for layer in self.cond_layers:
             cond_res = layer(cond_res)
-            if hasattr(self, 'cond_activation_func'):
-                cond_res = self.cond_activation_func(cond_res)
-        
-        if hasattr(self, 'alpha'):
-            cond_res *= self.alpha # reZero modifier
         
         if self.cond_residual:
             cond = cond + cond_res # adjust the original input by a residual
@@ -132,7 +108,7 @@ class WaveGlow(nn.Module):
         audio = audio.view(batch_dim, -1, self.n_group).transpose(1, 2)
         
         #  Upsample spectrogram to size of audio
-        if self.upsample_early:
+        if self.upsample_first:
             cond = self._upsample_mels(cond, audio.size(2)) # [B, mels, T//n_group]
         
         #assert audio.size(2) <= cond.size(2)
@@ -161,9 +137,9 @@ class WaveGlow(nn.Module):
         return torch.cat(output_audio, 1).transpose(1, 2).contiguous().view(batch_dim, -1), logdet
     
     def _upsample_mels(self, cond, audio_size):
-        cond = F.interpolate(cond, size=audio_size[2], mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
-        #cond = F.interpolate(cond, scale_factor=600, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None) # upsample by hop_length
+        cond = F.interpolate(cond, size=audio_size, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
         return cond
+        # return self.upsampler(cond)
     
     def inverse(self, z, cond, speaker_ids=None):
         # Add speaker conditioning
@@ -175,11 +151,6 @@ class WaveGlow(nn.Module):
         cond_res = cond
         for layer in self.cond_layers:
             cond_res = layer(cond_res)
-            if hasattr(self, 'cond_activation_func'):
-                cond_res = self.cond_activation_func(cond_res)
-        
-        if hasattr(self, 'alpha'):
-            cond_res *= self.alpha # reZero modifier
         
         if self.cond_residual:
             cond += cond_res # adjust the original input by a residual
@@ -190,7 +161,7 @@ class WaveGlow(nn.Module):
         z = z.view(batch_dim, -1, self.n_group).transpose(1, 2)
         
         #  Upsample spectrogram to size of audio
-        if self.upsample_early:
+        if self.upsample_first:
             cond = self._upsample_mels(cond, z.size(2)) # [B, mels, T//n_group]
         
         #assert z.size(2) <= cond.size(2)

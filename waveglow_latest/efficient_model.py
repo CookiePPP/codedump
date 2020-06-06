@@ -29,12 +29,12 @@ class WaveGlow(nn.Module):
             self.cond_layers = nn.ModuleList()
             
             # start cond layer
-            cond_layer = nn.Conv1d(self.n_mel_channels+self.speaker_embed_dim, hidden_dim, 3, padding=1, padding_mode='zeros')# (in_channels, out_channels, kernel_size)
+            cond_layer = nn.Conv1d(self.n_mel_channels+self.speaker_embed_dim, hidden_dim, 3, padding=1, padding_mode='replicate')# (in_channels, out_channels, kernel_size)
             cond_layer = nn.utils.weight_norm(cond_layer, name='weight')
             self.cond_layers.append(cond_layer)
             
             for i in range(1): # hidden layers
-                cond_layer = nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1, padding_mode='zeros')# (in_channels, out_channels, kernel_size)
+                cond_layer = nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1, padding_mode='replicate')# (in_channels, out_channels, kernel_size)
                 cond_layer = nn.utils.weight_norm(cond_layer, name='weight')
                 self.cond_layers.append(cond_layer)
             
@@ -91,13 +91,11 @@ class WaveGlow(nn.Module):
             cond = layer(cond)
         spect = spect + cond # skip connection
         #  Upsample spectrogram to size of audio
-        spect = self._upsample_mels(spect) # [B, mels, T//n_group]
         
         batch_dim, n_mel_channels, group_steps = spect.shape
         audio = audio.view(batch_dim, -1, self.n_group).transpose(1, 2)
         
-        assert audio.size(2) <= spect.size(2)
-        spect = spect[..., :audio.size(2)]
+        spect = self._upsample_mels(spect, audio.size(2)) # [B, mels, T//n_group]
         
         output_audio = []
         split_sections = [self.n_early_size, self.n_group]
@@ -121,10 +119,10 @@ class WaveGlow(nn.Module):
         output_audio.append(audio)
         return torch.cat(output_audio, 1).transpose(1, 2).contiguous().view(batch_dim, -1), logdet
     
-    def _upsample_mels(self, spect):
-        spect = F.pad(spect, (0, 1))
-        return F.interpolate(spect, size=((spect.size(2) - 1) * self.upsample_factor + 1,), mode='linear')
-        # return self.upsampler(spect)
+    def _upsample_mels(self, cond, audio_size):
+        cond = F.interpolate(cond, size=audio_size, mode='linear', align_corners=True)
+        return cond
+        # return self.upsampler(cond)
     
     def inverse(self, z, spect, speaker_ids=None):
         # Add speaker conditionings
@@ -136,11 +134,9 @@ class WaveGlow(nn.Module):
             cond = layer(cond)
         spect = spect + cond # skip connection
         #  Upsample spectrogram to size of audio
-        spect = self._upsample_mels(spect)
         batch_dim, n_mel_channels, group_steps = spect.shape
         z = z.view(batch_dim, -1, self.n_group).transpose(1, 2)
-        assert z.size(2) <= spect.size(2)
-        spect = spect[..., :z.size(2)]
+        spect = self._upsample_mels(spect, z.size(2)) # [B, mels, T//n_group]
         
         remained_z = []
         for r in z.split(self.z_split_sizes, 1):

@@ -38,23 +38,34 @@ def alignment_metric(alignments, input_lengths=None, output_lengths=None, averag
     if output_lengths == None:
         output_lengths = torch.ones(alignments.size(0), device=alignments.device)*(alignments.shape[2]-1) # [B] # 767
     batch_size = alignments.size(0)
-    optimums = torch.sqrt(input_lengths.double()**2 + output_lengths.double()**2).view(batch_size)
+    optimums = torch.sqrt(input_lengths.double().pow(2) + output_lengths.double().pow(2)).view(batch_size)
     
     # [B, enc, dec] -> [B, dec], [B, dec]
     values, cur_idxs = torch.max(alignments, 1) # get max value in column and location of max value
     
     cur_idxs = cur_idxs.float()
-    prev_indx = torch.cat((cur_idxs[:,0][:,None], cur_idxs[:,:-1]), dim=1) # shift entire tensor right by one.
-    dist = ((prev_indx - cur_idxs).pow(2) + 1).pow(0.5)
-    dist.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=dist.size(1)), 0.0) # remove padding
-    dist = dist.sum(dim=(1)) # remove padding
-    diagonalitys = (dist + 1.4142135)/optimums # remove padding
+    prev_indx = torch.cat((cur_idxs[:,0][:,None], cur_idxs[:,:-1]), dim=1) # shift entire tensor by one.
+    dist = ((prev_indx - cur_idxs).pow(2) + 1).pow(0.5) # [B, dec]
+    dist.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=dist.size(1)), 0.0) # set dist of padded to zero
+    dist = dist.sum(dim=(1)) # get total dist for each B
+    diagonalitys = (dist + 1.4142135)/optimums # dist / optimal dist
     
     alignments.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=alignments.size(2))[:,None,:], 0.0)
-    encoder_max_focus = torch.sum(alignments, dim=2).max(dim=1)[0] # [B, enc, dec] -> [B, sum_enc] -> [B]
-    encoder_min_focus = torch.sum(alignments, dim=2).min(dim=1)[0]
-    encoder_avg_focus = torch.sum(alignments, dim=2).mean(dim=1)
+    att_enc_total = torch.sum(alignments, dim=2)# [B, enc, dec] -> [B, enc]
     
+    # calc max (with padding ignored)
+    att_enc_total.masked_fill_(~get_mask_from_lengths(input_lengths, max_len=att_enc_total.size(1)), 0.0)
+    encoder_max_focus = att_enc_total.max(dim=1)[0] # [B, enc] -> [B]
+    
+    # calc mean (with padding ignored)
+    encoder_avg_focus = att_enc_total.mean(dim=1)   # [B, enc] -> [B]
+    encoder_avg_focus *= (att_enc_total.size(1)/input_lengths.float())
+    
+    # calc min (with padding ignored)
+    att_enc_total.masked_fill_(~get_mask_from_lengths(input_lengths, max_len=att_enc_total.size(1)), 1.0)
+    encoder_min_focus = att_enc_total.min(dim=1)[0] # [B, enc] -> [B]
+    
+    # calc average max attention (with padding ignored)
     values.masked_fill_(~get_mask_from_lengths(output_lengths, max_len=values.size(1)), 0.0) # because padding
     avg_prob = values.mean(dim=1)
     avg_prob *= (alignments.size(2)/output_lengths.float()) # because padding
@@ -75,30 +86,70 @@ def chunks(lst, n):
         yield lst[i:i + n]
 
 
-def parse_text_into_quotes(texts):
-    """Swap speaker at every quote mark. Also split longer phrases at periods.
-    If text previously inside a quote is too long and split, then each split segment will have quotes around it (for information later on rather than accuracy to the original text)."""
-    max_text_segment_length = 120
+# generator for text splitting.
+def parse_text_into_segments(texts, split_at_quotes=True, target_segment_length=200):
+    """Swap speaker at every quote mark. Each split segment will have quotes around it (for information later on rather than accuracy to the original text)."""
+    
+    # split text by quotes
     quo ='"' # nested quotes in list comprehension are hard to work with
     texts = [f'"{text.replace(quo,"").strip()}"' if i%2 else text.replace(quo,"").strip() for i, text in enumerate(unidecode(texts).split('"'))]
     
-    texts_segmented = []
-    for text in texts:
+    # clean up and remove empty texts
+    def clean_text(text):
         text = text.strip()
-        if not len(text.replace('"','').strip()): continue
-        text = text\
-            .replace("\n"," ")\
-            .replace("  "," ")\
-            .replace("> --------------------------------------------------------------------------","")
-        if len(text) > max_text_segment_length:
-            for seg in [x.strip() for x in sent_tokenize(text) if len(x.strip()) and x is not '"']: 
-                if '"' in text:
-                    if seg[0] != '"': seg='"'+seg
-                    if seg[-1] != '"': seg+='"'
-                texts_segmented.append(seg)
-        else:
-            texts_segmented.append(text.strip())
-    return texts_segmented
+        text = text.replace("\n"," ").replace("  "," ").replace("> --------------------------------------------------------------------------","")
+        return text
+    texts = [clean_text(text) for text in texts if len(text.strip().replace('"','').strip()) or len(clean_text(text))]
+    assert len(texts)
+    
+    # split text by sentences and add commas in where needed.
+    def quotify(seg, text):
+        if '"' in text:
+            if seg[0] != '"': seg='"'+seg
+            if seg[-1] != '"': seg+='"'
+        return seg
+    texts_tmp = []
+    texts = [texts_tmp.extend([quotify(x.strip(), text) for x in sent_tokenize(text) if len(x.replace('"','').strip())]) for text in texts]
+    texts = texts_tmp
+    del texts_tmp
+    assert len(texts)
+    
+    # merge neighbouring sentences
+    quote_mode = False
+    texts_output = []
+    texts_segmented = ''
+    texts_len = len(texts)
+    for i, text in enumerate(texts):
+        # split segment if quote swap
+        if split_at_quotes and ('"' in text and quote_mode == False) or (not '"' in text and quote_mode == True):
+            texts_segmented.replace('""','')
+            texts_output.append(texts_segmented)
+            texts_segmented=text
+            quote_mode = not quote_mode
+        
+        # split segment if max length
+        elif len(texts_segmented+text) > target_segment_length:
+            texts_segmented.replace('""','')
+            texts_output.append(texts_segmented)
+            texts_segmented=text
+        
+        else: # continue adding to segment
+            texts_segmented+= f' {text}'
+    # add any remaining stuff.
+    if len(texts_segmented):
+        texts_output.append(texts_segmented)
+    assert len(texts_output)
+    
+    return texts_output
+
+
+def get_first_over_thresh(x, threshold):
+    """Takes [B, T] and outputs first T over threshold for each B (output.shape = [B])."""
+    device = x.device
+    x = x.clone().cpu().float() # GPU implementation of argmax() splits tensor into 32 elem chunks, each chunk is parsed forward then the outputs are collected together... backwards
+    x[:,-1] = threshold # set last to threshold just incase the output didn't finish generating.
+    x[x>threshold] = threshold
+    return ( (x.size(1)-1)-(x.flip(dims=(1,)).argmax(dim=1)) ).to(device).int()
 
 
 class T2S:
@@ -197,6 +248,11 @@ class T2S:
         return embedding
     
     
+    def is_ax(self, config):
+        """Quickly check if a model uses the Ax WaveGlow core by what's available in the config file."""
+        return True if 'upsample_first' in config.keys() else False
+    
+    
     def load_waveglow(self, waveglow_path, config_fpath):
         # Load config file
         with open(config_fpath) as f:
@@ -214,10 +270,13 @@ class T2S:
         print(f"Config File from '{config_fpath}' successfully loaded.")
         
         # import the correct model core
-        if waveglow_config["yoyo"]:
-            from efficient_model import WaveGlow
+        if self.is_ax(waveglow_config):
+            from efficient_model_ax import WaveGlow
         else:
-            from glow import WaveGlow
+            if waveglow_config["yoyo"]:
+                from efficient_model import WaveGlow
+            else:
+                from glow import WaveGlow
         
         # initialize model
         print(f"intializing WaveGlow model... ", end="")
@@ -291,18 +350,55 @@ class T2S:
         return validated_names
     
     
-    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, gate_delay=6, gate_threshold=0.5, outdir=r'server_infer', filename_prefix=None, status_updates=False, time_to_gen=True, absolute_maximum_tries=4096, absolutely_required_score=-1e3):    
+    def infer(self, text, speaker_names, style_mode, textseg_mode, batch_mode, max_attempts, max_duration_s, batch_size, dyna_max_duration_s, use_arpabet, target_score, speaker_mode, cat_silence_s, textseg_len_target, gate_delay=0, gate_threshold=0.5, filename_prefix=None, status_updates=False, show_time_to_gen=True, end_mode='thresh', absolute_maximum_tries=4096, absolutely_required_score=-1e3):
+        """
+        PARAMS:
+        ...
+        gate_delay
+            default: 0
+            options: int ( 0 -> inf )
+            info: a modifier for when spectrograms are cut off.
+                  This would allow you to add silence to the end of a clip without an unnatural fade-out.
+                  7 will give 0.0875 seconds of delay before ending the clip.
+                  If this param is set too high then the model will try to start speaking again
+                  despite not having any text left to speak, therefore keeping it low is typical.
+        gate_threshold
+            default: 0.5
+            options: float ( 0.0 -> 1.0 )
+            info: used to control when Tacotron2 will stop generating new mel frames.
+                  This will effect speed of generation as the model will generate
+                  extra frames till it hits the threshold. This may be preferred if
+                  you believe the model is stopping generation too early.
+                  When end_mode == 'thresh', this param will also be used to decide
+                  when the audio from the best spectrograms should be cut off.
+        ...
+        end_mode
+            default: 'thresh'
+            options: ['max','thresh']
+            info: controls where the spectrograms are cut off.
+                  'max' will cut the spectrograms off at the highest gate output, 
+                  'thresh' will cut off spectrograms at the first gate output over gate_threshold.
+        """
+        assert end_mode in ['max','thresh'], f"end_mode of {end_mode} is not valid."
+        assert gate_delay > -10, "gate_delay is negative."
+        assert gate_threshold > 0.0, "gate_threshold less than 0.0"
+        assert gate_threshold <= 1.0, "gate_threshold greater than 1.0"
+        os.makedirs(self.conf["working_directory"], exist_ok=True)
+        os.makedirs(self.conf["output_directory"], exist_ok=True)
+        
         with torch.no_grad():
-            if time_to_gen:
-                audio_len = 0
-                start_time = time.time()
+            # time to gen
+            audio_len = 0
+            start_time = time.time()
+            
+            # Score Metric
+            scores = []
             
             # Score Parameters
-            diagonality_weighting = 0.5 # 'stutter factor', a penalty for clips where the model jumps back and forwards in the sentence.
+            diagonality_weighting = 0.5 # 'varibility factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
             max_focus_weighting = 1.0   # 'stuck factor', a penalty for clips that spend execisve time on the same letter.
-            min_focus_weighting = 1.0   # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
+            min_focus_weighting = 0.25  # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
             avg_focus_weighting = 1.0   # 'skip factor', a penalty for skipping very large parts of the input text
-            
             
             # add a filename prefix to keep multiple requests seperate
             if not filename_prefix:
@@ -314,11 +410,15 @@ class T2S:
             elif textseg_mode == 'segment_by_line':
                 texts = text.split("\n")
             elif textseg_mode == 'segment_by_sentence':
-                texts = [x.strip() for x in sent_tokenize(text) if len(x.strip())]# temp, nltk has a good version of this so no point making my own.
+                texts = parse_text_into_segments(text, split_at_quotes=False, target_segment_length=textseg_len_target)
             elif textseg_mode == 'segment_by_sentencequote':
-                texts = parse_text_into_quotes(text)
+                texts = parse_text_into_segments(text, split_at_quotes=True, target_segment_length=textseg_len_target)
             else:
                 raise NotImplementedError(f"textseg_mode of {textseg_mode} is invalid.")
+            del text
+            
+            # cleanup for empty inputs.
+            texts = [x.strip() for x in texts if len(x.strip())]
             
             total_len = len(texts)
             
@@ -328,7 +428,7 @@ class T2S:
             self.tacotron.decoder.max_decoder_steps = int(min(max([len(t) for t in texts]) * float(dyna_max_duration_s)*frames_per_second, float(max_duration_s)*frames_per_second))
             self.tacotron.decoder.gate_threshold = float(gate_threshold)
             
-            # find closest valid name
+            # find closest valid name(s)
             speaker_names = self.get_closest_names(speaker_names)
             
             # pick how the batch will be handled
@@ -345,6 +445,7 @@ class T2S:
             else:
                 raise NotImplementedError(f"batch_mode of {batch_mode} is invalid.")
             
+            show_inference_progress_start = time.time()
             continue_from = 0
             counter = 0
             total_specs = 0
@@ -355,10 +456,9 @@ class T2S:
                 
                 # setup the text batches
                 text_batch_in_progress.append(text)
-                if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (len(texts)-1)): # if text batch ready or final input
+                if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (total_len-1)): # if text batch ready or final input
                     text_batch = text_batch_in_progress
                     text_batch_in_progress = []
-                    n_passes+=1 # metric for html
                 else:
                     continue # if batch not ready, add another text
                 
@@ -383,7 +483,7 @@ class T2S:
                 
                 if 0:# (optional) use different speaker list for text inside quotes
                     speaker_ids = [random.choice(speakers).split("|")[2] if ('"' in text) else random.choice(narrators).split("|")[2] for text in text_batch] # pick speaker if quotemark in text, else narrator
-                    text_batch  = [text.replace('"',"") for text in text_batch] # remove quotes from text
+                text_batch  = [text.replace('"',"") for text in text_batch] # remove quotes from text
                 
                 if len(batch_speaker_names) > len(text_batch):
                     batch_speaker_names = batch_speaker_names[:len(text_batch)]
@@ -411,12 +511,12 @@ class T2S:
                     try:
                         tokenized, _, _ = self.tm_sentence_tokenizer.tokenize_sentences(text_batch) # input array [B] e.g: ["Test?","2nd Sentence!"]
                     except:
-                        raise Exception(f"text\n{text_batch}\nfailed to tokenize.")
+                        raise Exception(f"TorchMoji failed to tokenize text:\n{text_batch}")
                     try:
                         embedding = self.tm_torchmoji(tokenized) # returns np array [B, Embed]
                     except Exception as ex:
                         print(f'Exception: {ex}')
-                        print(f"text: {text_batch} failed to process.")
+                        print(f"TorchMoji failed to process text:\n{text_batch}")
                         #raise Exception(f"text\n{text}\nfailed to process.")
                     style_input = torch.from_numpy(embedding).cuda().half().repeat_interleave(batch_size_per_text, dim=0)
                 elif style_mode == 'torchmoji_string':
@@ -424,6 +524,10 @@ class T2S:
                     raise NotImplementedError
                 else:
                     raise NotImplementedError
+                
+                if style_input.size(0) < (simultaneous_texts*batch_size_per_text):
+                    diff = -(-(simultaneous_texts*batch_size_per_text) // style_input.size(0))
+                    style_input = style_input.repeat(diff, 1)[:simultaneous_texts*batch_size_per_text]
                 
                 # check punctuation and add '.' if missing
                 valid_last_char = '-,.?!;:' # valid final characters in texts
@@ -448,7 +552,7 @@ class T2S:
                 text_lengths = text_lengths.clone()
                 sequence = sequence.clone()
                 
-                print("sequence.shape[0] =",sequence.shape[0])
+                print("sequence.shape[0] =",sequence.shape[0]) # debug
                 
                 try:
                     best_score = np.ones(simultaneous_texts) * -9e9
@@ -456,17 +560,19 @@ class T2S:
                     best_generations = [0]*simultaneous_texts
                     best_score_str = ['']*simultaneous_texts
                     while np.amin(best_score) < target_score:
-                    
                         # run Tacotron
                         if status_updates: print("Running Tacotron2... ", end='')
                         mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = self.tacotron.inference(sequence, tacotron_speaker_ids, style_input=style_input, style_mode=style_mode, text_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0))
                         
                         # metric for html side
+                        n_passes+=1 # metric for html
                         total_specs+=mel_batch_outputs.shape[0]
                         
                         # get metrics for each item
-                        gate_batch_outputs[:,:10] = 0 # ignore gate predictions for the first bit
-                        output_lengths = gate_batch_outputs.argmax(dim=1)+gate_delay
+                        if end_mode == 'thresh':
+                            output_lengths = get_first_over_thresh(gate_batch_outputs, gate_threshold)
+                        elif end_mode == 'max':
+                            output_lengths = gate_batch_outputs.argmax(dim=1)
                         diagonality_batch, avg_prob_batch, enc_max_focus_batch, enc_min_focus_batch, enc_avg_focus_batch = alignment_metric(alignments_batch, input_lengths=text_lengths.repeat_interleave(batch_size_per_text, dim=0), output_lengths=output_lengths)
                         
                         # split batch into items
@@ -489,11 +595,12 @@ class T2S:
                             for k, (mel_outputs, mel_outputs_postnet, gate_outputs, alignments, diagonality, avg_prob, enc_max_focus, enc_min_focus, enc_avg_focus) in enumerate(sametext_batch):
                                 # factors that make up score
                                 weighted_score =  avg_prob.item() # general alignment quality
-                                weighted_score -= (max(diagonality.item(),1.11)-1.11) * diagonality_weighting  # consistent pace
-                                weighted_score -= max((enc_max_focus.item()-20), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
-                                weighted_score -= max(0.9-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
-                                weighted_score -= max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
-                                score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max((enc_max_focus.item()-20), 0) * 0.005 * max_focus_weighting,2)} {round(max(0.9-enc_min_focus.item(),0),2)}|"
+                                diagonality_punishment = (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # smooth pacing
+                                max_focus_punishment = max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
+                                min_focus_punishment = max(0.4-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
+                                avg_focus_punishment = max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
+                                weighted_score -= (diagonality_punishment + max_focus_punishment + min_focus_punishment + avg_focus_punishment)
+                                score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max_focus_punishment,2)} {round(min_focus_punishment,2)} {round(avg_focus_punishment,2)}|"
                                 if weighted_score > best_score[j]:
                                     best_score[j] = weighted_score
                                     best_score_str[j] = score_str
@@ -506,52 +613,64 @@ class T2S:
                                     raise StopIteration
                         
                         if np.amin(tries) < (max_attempts-1):
-                            print('Target score not reached. Retrying.')
+                            print(f'Minimum score of {np.amin(best_score)} is less than Target score of {target_score}. Retrying.')
                         elif np.amin(best_score) < absolutely_required_score:
-                            print('Score less than absolutely required score. Retrying extra.')
+                            print(f"Minimum score of {np.amin(best_score)} is less than 'Absolutely Required score' of {absolutely_required_score}. Retrying.")
                 except StopIteration:
                     del batch
                     if status_updates: print("Done")
                     pass
                 
+                # cleanup VRAM
+                style_input = sequence = None
+                
                 # [[mel, melpost, gate, align], [mel, melpost, gate, align], [mel, melpost, gate, align]] -> [[mel, mel, mel], [melpost, melpost, melpost], [gate, gate, gate], [align, align, align]]
-                # zip is being weird so alternative used
-                mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = [x[0][0].T for x in best_generations], [x[1][0].T for x in best_generations], [x[2][0] for x in best_generations], [x[3][0] for x in best_generations] # pickup whatever was the best attempts
+                mel_batch_outputs, mel_batch_outputs_postnet, gate_batch_outputs, alignments_batch = [x[0][0].T for x in best_generations], [x[1][0].T for x in best_generations], [x[2][0] for x in best_generations], [x[3][0] for x in best_generations]
+                # pickup the best attempts from each input
                 
                 # stack best output arrays into tensors for WaveGlow
-                gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0)
-                max_length = torch.max(gate_batch_outputs.argmax(dim=1)) # get largest duration
+                gate_batch_outputs = torch.nn.utils.rnn.pad_sequence(gate_batch_outputs, batch_first=True, padding_value=0.0)
+                
+                # get duration(s)
+                if end_mode == 'thresh':
+                    max_lengths = get_first_over_thresh(gate_batch_outputs, gate_threshold)+gate_delay
+                elif end_mode == 'max':
+                    max_lengths = gate_batch_outputs.argmax(dim=1)+gate_delay
+                max_length = torch.max(max_lengths)
+                
                 mel_batch_outputs = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 mel_batch_outputs_postnet = torch.nn.utils.rnn.pad_sequence(mel_batch_outputs_postnet, batch_first=True, padding_value=-11.6).transpose(1,2)[:,:,:max_length]
                 alignments_batch = torch.nn.utils.rnn.pad_sequence(alignments_batch, batch_first=True, padding_value=0)[:,:max_length,:]
                 
-                if status_updates: print("Running WaveGlow... ", end='')
+                if status_updates:
+                    print("Running WaveGlow... ", end='')
                 # Run WaveGlow
-                audio_batch = self.waveglow.infer(mel_batch_outputs_postnet, speaker_ids=waveglow_speaker_ids, sigma=self.wg_train_sigma*0.9)
+                audio_batch = self.waveglow.infer(mel_batch_outputs_postnet, speaker_ids=waveglow_speaker_ids, sigma=self.wg_train_sigma*0.95)
                 audio_denoised_batch = self.wg_denoiser(audio_batch, strength=0.0001).squeeze(1)
-                print("audio_denoised_batch.shape", audio_denoised_batch.shape)
-                if status_updates: print('Done')
+                print("audio_denoised_batch.shape =", audio_denoised_batch.shape) # debug
+                if status_updates:
+                    print('Done')
                 
                 for j, (audio, audio_denoised) in enumerate(zip(audio_batch.split(1, dim=0), audio_denoised_batch.split(1, dim=0))):
                     # remove WaveGlow padding
-                    audio_end = (gate_batch_outputs[j].argmax()+gate_delay) * self.tt_hparams.hop_length
+                    audio_end = max_lengths[j] * self.tt_hparams.hop_length
                     audio = audio[:,:audio_end]
                     audio_denoised = audio_denoised[:,:audio_end]
                     
                     # remove Tacotron2 padding
-                    spec_end = gate_batch_outputs[j].argmax()+gate_delay
+                    spec_end = max_lengths[j]
                     mel_outputs = mel_batch_outputs.split(1, dim=0)[j][:,:,:spec_end]
                     mel_outputs_postnet = mel_batch_outputs_postnet.split(1, dim=0)[j][:,:,:spec_end]
                     alignments = alignments_batch.split(1, dim=0)[j][:,:spec_end,:text_lengths[j]]
                     
                     # save audio
-                    filename = f"{filename_prefix}_{counter//300:02}_{counter:05}.wav"
-                    save_path = os.path.join(outdir, filename)
+                    filename = f"{filename_prefix}_{counter//300:04}_{counter:06}.wav"
+                    save_path = os.path.join(self.conf['working_directory'], filename)
                     
                     # add silence to clips (ignore last clip)
-                    if cat_silence_s and not j == audio_batch.shape[0]-1:
+                    if cat_silence_s:
                         cat_silence_samples = int(cat_silence_s*self.tt_hparams.sampling_rate)
-                        audio = torch.cat((audio, torch.zeros((1, cat_silence_samples), device=audio.device, dtype=audio.dtype)), dim=1)
+                        audio = torch.nn.functional.pad(audio, (0, cat_silence_samples))
                     
                     # scale audio for int16 output
                     audio = (audio * 2**15).squeeze().cpu().numpy().astype('int16')
@@ -568,31 +687,72 @@ class T2S:
                     counter+=1
                     audio_len+=audio_end
                 
-                if time_to_gen:
-                    audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
-                    time_to_gen = round(time.time()-start_time,3)
-                    print(f"Took {time_to_gen}s to generate {audio_seconds_generated}s of audio. (best of {tries.sum().astype('int')} tries)")
+                if self.conf['show_inference_alignment_scores']:
+                    for k, bs in enumerate(best_score):
+                        print(f"Input_Str  {k}: '{text_batch[k]}'")
+                        print(f"Best_Score {k}: {bs:0.4f}")
+                        print(f"Score_Str  {k}: {best_score_str[k]}\n")
+                
+                for score in best_score:
+                    scores+=[score,]
+                
+                if self.conf['show_inference_progress']:
+                    time_elapsed = time.time()-show_inference_progress_start
+                    time_per_clip = time_elapsed/(text_index+1)
+                    remaining_files = (total_len-(text_index+1))
+                    eta_finish = (remaining_files*time_per_clip)/60
+                    print(f"{text_index}/{total_len}, {eta_finish:.2f}mins remaining.")
+                    del time_per_clip, eta_finish, remaining_files, time_elapsed
+                
+                audio_seconds_generated = round(audio_len.item()/self.tt_hparams.sampling_rate,3)
+                time_to_gen = round(time.time()-start_time,3)
+                if show_time_to_gen:
+                    print(f"Generated {audio_seconds_generated}s of audio in {time_to_gen}s wall time - so far. (best of {tries.sum().astype('int')} tries this pass)")
+                
+                print("\n") # seperate each pass
             
-            # merge clips
-            output_filename = f"{filename_prefix}_output.wav"
+            # ------ merge clips ------ #
+            output_filename = f"{filename_prefix}_output"
+            n_audio_batches = -(-len( glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_*_*.wav")) ) // 300)# get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
             
-            # get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
-            n_audio_batches = -(-len( glob(os.path.join(outdir, f"{filename_prefix}_*_*.wav")) ) // 300)
-            
-            # merge batches of 300 files together
+            running_fsize = 0
+            fpaths = []
+            out_count = 0
             for i in range(n_audio_batches):
+                # merge batch of 300 files together
                 print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
-                os.system(f'sox {os.path.join(outdir, f"{filename_prefix}_{i:02}_*.wav")} -b 16 {os.path.join(outdir, f"{filename_prefix}_concat_{i:02}.wav")}')
+                fpath = os.path.join(self.conf['working_directory'], f"{filename_prefix}_concat_{i:04}.wav")
+                os.system(f'sox {os.path.join(self.conf["working_directory"], f"{filename_prefix}_{i:04}_*.wav")} -b 16 {fpath}')
+                
+                # delete the original 300 files
+                print("Cleaning up remaining temp files... ", end="")
+                tmp_files = [fp for fp in glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_{i:04}_*.wav")) if "output" not in fp]
+                _ = [os.remove(fp) for fp in tmp_files]
                 print("Done")
-            
-            # merge the merged batches into final output
-            print(f"Saving output to '{os.path.join(outdir, output_filename)}'... ", end='')
-            os.system(f'sox "{os.path.join(outdir, f"{filename_prefix}_concat_*.wav")}" -b 16 "{os.path.join(outdir, output_filename)}"') # merge the merged files into a final output. bit depth of 16 required to go over 4 hour length
-            print("Done.")
-            
-            # delete all clips other than the merged output
-            print("Cleaning up temp files... ", end="")
-            tmp_files = [fp for fp in glob(os.path.join(outdir, f"{filename_prefix}*.wav")) if "output" not in fp]
-            _ = [os.remove(fp) for fp in tmp_files]
-            print("Done")
-        return output_filename, time_to_gen, audio_seconds_generated, total_specs, n_passes
+                
+                # add merged file to final output(s)
+                fsize = os.stat(fpath).st_size
+                running_fsize += fsize
+                fpaths += [fpath,]
+                if running_fsize/(1024**3) > 2.0 or (i+1) == n_audio_batches or (len(fpaths) > 300): # if total size of fpaths is > 2GB or at final file: save as output
+                    fpath_str = '"'+'" "'.join(fpaths)+'"' # chain together fpaths in string for SoX input
+                    output_extension = self.conf['sox_output_ext']
+                    if output_extension[0] != '.':
+                        output_extension = f".{output_extension}"
+                    out_name = f"{output_filename}_{out_count:02}{output_extension}"
+                    out_path = os.path.join(self.conf['output_directory'], out_name)
+                    os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
+                    
+                    if running_fsize >= (os.stat(out_path).st_size - 1024): # if output seems to have correctly generated.
+                        print("Cleaning up merged temp files... ", end="") # delete the temp files and keep the output
+                        _ = [os.remove(fp) for fp in fpaths]
+                        print("Done")
+                    
+                    running_fsize = 0
+                    out_count+=1
+                    fpaths = []
+        
+        scores = np.stack(scores)
+        avg_score = np.mean(scores)
+        
+        return out_name, time_to_gen, audio_seconds_generated, total_specs, n_passes, avg_score

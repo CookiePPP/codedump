@@ -10,19 +10,19 @@ def create_hparams(hparams_string=None, verbose=False):
         # Experiment Parameters        #
         ################################
         epochs=1000,
-        iters_per_checkpoint=1000,
-        iters_per_validation=1000,
+        iters_per_checkpoint=2000,
+        iters_per_validation=2000,
         seed=1234,
         dynamic_loss_scaling=True,
-        fp16_run=False,
-        distributed_run=False,
+        fp16_run=True,
+        distributed_run=True,
         dist_backend="nccl",
         dist_url="tcp://127.0.0.1:54321",
         cudnn_enabled=True,
         cudnn_benchmark=False,
         #ignore_layers=["decoder.attention_layer.F.2.weight", "decoder.attention_layer.F.2.bias","decoder.attention_layer.F.0.linear_layer.weight","decoder.attention_layer.F.0.linear_layer.bias"],
         ignore_layers=["encoder.lstm.weight_ih_l0","encoder.lstm.weight_hh_l0","encoder.lstm.bias_ih_l0","encoder.lstm.bias_hh_l0","encoder.lstm.weight_ih_l0_reverse","encoder.lstm.weight_hh_l0_reverse","encoder.lstm.bias_ih_l0_reverse","encoder.lstm.bias_hh_l0_reverse","decoder.attention_rnn.weight_ih","decoder.attention_rnn.weight_hh","decoder.attention_rnn.bias_ih","decoder.attention_rnn.bias_hh","decoder.attention_layer.query_layer.linear_layer.weight","decoder.attention_layer.memory_layer.linear_layer.weight","decoder.decoder_rnn.weight_ih","decoder.linear_projection.linear_layer.weight","decoder.gate_layer.linear_layer.weight"],
-        frozen_modules=[], # only the module names are required e.g: "encoder." will freeze all parameters INSIDE the encoder recursively
+        frozen_modules=["none-N/A"], # only the module names are required e.g: "encoder." will freeze all parameters INSIDE the encoder recursively
         print_layer_names_during_startup=True,
         
         ################################
@@ -168,10 +168,12 @@ def create_hparams(hparams_string=None, verbose=False):
         learning_rate=0.1e-5,
         weight_decay=1e-6,
         grad_clip_thresh=1.0,
-        batch_size=28,
-        val_batch_size=28, # for more precise comparisons between models, constant batch_size is useful
-        truncated_length=640, # max mel length till truncation.
-        mask_padding=True,
+        batch_size=32,
+        val_batch_size=32, # for more precise comparisons between models, constant batch_size is useful
+        use_TBPTT=True,
+        truncated_length=1000, # max mel length till truncation.
+        mask_padding=True,#mask values by setting them to the same values in target and predicted
+        masked_select=True,#mask values by removing them from the calculation
         
         # (DFR) Drop Frame Rate
         global_mean_npy='global_mean.npy',

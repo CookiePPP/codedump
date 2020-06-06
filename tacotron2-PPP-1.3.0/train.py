@@ -31,8 +31,6 @@ import os.path
 
 from metric import alignment_metric
 
-from apex import amp
-from apex import optimizers as apexopt
 save_file_check_path = "save"
 num_workers_ = 1 # DO NOT CHANGE WHEN USING TRUNCATION
 start_from_checkpoints_from_zero = 0
@@ -105,9 +103,9 @@ def init_distributed(hparams, n_gpus, rank, group_name):
 def prepare_dataloaders(hparams, saved_lookup):
     # Get data, data loaders and collate function ready
     speaker_ids = saved_lookup if hparams.use_saved_speakers else None
-    trainset = TextMelLoader(hparams.training_files, hparams, shuffle=True,
+    trainset = TextMelLoader(hparams.training_files, hparams, shuffle=False,
                            speaker_ids=speaker_ids)
-    valset = TextMelLoader(hparams.validation_files, hparams, shuffle=True,
+    valset = TextMelLoader(hparams.validation_files, hparams, shuffle=False,
                            speaker_ids=trainset.speaker_ids)
     collate_fn = TextMelCollate(hparams.n_frames_per_step)
 
@@ -315,13 +313,6 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     torch.manual_seed(hparams.seed)
     torch.cuda.manual_seed(hparams.seed)
     
-    # load and/or generate global_mean
-    if hparams.drop_frame_rate > 0.:
-        if rank != 0: # if global_mean not yet calcuated, wait for main thread to do it
-            while not os.path.exists(hparams.global_mean_npy): time.sleep(1)
-        global_mean = calculate_global_mean(train_loader, hparams.global_mean_npy, hparams)
-        hparams.global_mean = global_mean
-    
     # initialize blank model
     model = load_model(hparams)
     model.eval()
@@ -329,7 +320,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
     
     # (optional) show the names of each layer in model, mainly makes it easier to copy/paste what you want to adjust
     if hparams.print_layer_names_during_startup:
-        print(*[f"Layer{i} = "+str(x[0]) for i,x in enumerate(list(model.named_parameters()))], sep="\n")
+        print(*[f"Layer{i} = "+str(x[0])+" "+str(x[1].shape) for i,x in enumerate(list(model.named_parameters()))], sep="\n")
     
     # (optional) Freeze layers by disabling grads
     if len(hparams.frozen_modules):
@@ -372,12 +363,20 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
             if hparams.use_saved_learning_rate:
                 learning_rate = _learning_rate
         iteration += 1  # next iteration is iteration + 1
-        epoch_offset = max(0, int(iteration / len(train_loader)))
         print('Model Loaded')
     
     # define datasets/dataloaders
     train_loader, valset, collate_fn, train_sampler, trainset = prepare_dataloaders(hparams, saved_lookup)
+    epoch_offset = max(0, int(iteration / len(train_loader)))
     speaker_lookup = trainset.speaker_ids
+    
+    # load and/or generate global_mean
+    if hparams.drop_frame_rate > 0.:
+        if rank != 0: # if global_mean not yet calcuated, wait for main thread to do it
+            while not os.path.exists(hparams.global_mean_npy): time.sleep(1)
+        global_mean = calculate_global_mean(train_loader, hparams.global_mean_npy, hparams)
+        hparams.global_mean = global_mean
+        model.global_mean = global_mean
     
     # define scheduler
     use_scheduler = 0
@@ -514,7 +513,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, warm_sta
                         output_directory, "checkpoint_{}".format(iteration))
                     save_checkpoint(model, optimizer, learning_rate, iteration, hparams, best_validation_loss, average_loss, speaker_lookup, checkpoint_path)
             
-            if not is_overflow and ((iteration % int((hparams.iters_per_checkpoint)/1) == 0) or (os.path.exists(save_file_check_path)) or (iteration < 1000 and (iteration % 250 == 0))):
+            if not is_overflow and ((iteration % int((hparams.iters_per_validation)/1) == 0) or (os.path.exists(save_file_check_path)) or (iteration < 1000 and (iteration % 250 == 0))):
                 if rank == 0 and os.path.exists(save_file_check_path):
                     os.remove(save_file_check_path)
                 # perform validation and save "best_model" depending on validation loss
@@ -575,6 +574,11 @@ if __name__ == '__main__':
 
     if gen_new_mels:
         print("Generating Mels"); create_mels(); print("Finished Generating Mels")
+    
+    # these are needed for fp16 training, not inference
+    if hparams.fp16_run:
+        from apex import amp
+        from apex import optimizers as apexopt
     
     train(args.output_directory, args.log_directory, args.checkpoint_path,
           args.warm_start, args.warm_start_force, args.n_gpus, args.rank, args.group_name, hparams)

@@ -80,7 +80,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, fp16_run, warm
         iteration = checkpoint_dict['iteration']
         optimizer.load_state_dict(checkpoint_dict['optimizer'])
     model_dict = checkpoint_dict['model']
-    if fp16_run and 'amp' in checkpoint_dict.keys(): amp.load_state_dict(checkpoint_dict['amp'])
+    if not warm_start and fp16_run and 'amp' in checkpoint_dict.keys(): amp.load_state_dict(checkpoint_dict['amp'])
     if scheduler and 'scheduler' in checkpoint_dict.keys(): scheduler.load_state_dict(checkpoint_dict['scheduler'])
     
     if warm_start:
@@ -166,11 +166,6 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             else:
                 mel = np.load(melpath) # load mel from file into numpy arr
                 mel = torch.from_numpy(mel).unsqueeze(0).cuda() # from numpy arr to tensor on GPU
-            
-#            if data_config['preempthasis']: # preempthasis
-#                audio = audio.numpy()
-#                audio = np.append(audio[0], audio[1:] - float(data_config['preempthasis']) * audio[:-1]) # preempthasis
-#                audio = torch.from_numpy(audio)
             
             if hasattr(model, 'multispeaker') and model.multispeaker == True:
                 assert len(remaining), f"Speaker ID missing while multispeaker == True.\nLine: {i}\n'{'|'.join([autiopath, melpath])}'"
@@ -267,8 +262,8 @@ def multiLR(model):
     return model_parameters, (in_layers_offsets, res_skip_layers_offsets, start_offsets, end_offsets, cond_layer_offsets)
     
 def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
-          sigma, iters_per_checkpoint, batch_size, seed, fp16_run,
-          checkpoint_path, with_tensorboard, logdirname, datedlogdir):
+          sigma, loss_empthasis, iters_per_checkpoint, batch_size, seed, fp16_run,
+          checkpoint_path, with_tensorboard, logdirname, datedlogdir, warm_start=False):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     #=====START: ADDED FOR DISTRIBUTED======
@@ -278,15 +273,20 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     
     global WaveGlow
     global WaveGlowLoss
-    if waveglow_config["yoyo"]: # efficient_mode # TODO: Add to Config File
-        from efficient_model import WaveGlow
+    
+    ax = True # this is **really** bad coding practice :D
+    if ax:
+        from efficient_model_ax import WaveGlow
         from efficient_loss import WaveGlowLoss
     else:
-        from glow import WaveGlow, WaveGlowLoss
+        if waveglow_config["yoyo"]: # efficient_mode # TODO: Add to Config File
+            from efficient_model import WaveGlow
+            from efficient_loss import WaveGlowLoss
+        else:
+            from glow import WaveGlow, WaveGlowLoss
     
-    criterion = WaveGlowLoss(sigma)
+    criterion = WaveGlowLoss(sigma, loss_empthasis)
     model = WaveGlow(**waveglow_config).cuda()
-    
     #=====START: ADDED FOR DISTRIBUTED======
     if num_gpus > 1:
         model = apply_gradient_allreduce(model)
@@ -305,19 +305,23 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                  n_mel_channels=160,
                                  mel_fmin=data_config['mel_fmin'], mel_fmax=data_config['mel_fmax'])
     
-    optimizer = "Adam"
+    optimizer = "LAMB"
     optimizer_fused = True # use Apex fused optimizer, should be identical to normal but slightly faster
     if optimizer_fused:
         from apex import optimizers as apexopt
         if optimizer == "Adam":
             optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate)
         elif optimizer == "LAMB":
-            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate)
+            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1000)
     else:
         if optimizer == "Adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         elif optimizer == "LAMB":
-            raise# PyTorch doesn't currently include LAMB optimizer.
+            from lamb import Lamb as optLAMB
+            optimizer = optLAMB(model.parameters(), lr=learning_rate)
+            #import torch_optimizer as optim
+            #optimizer = optim.Lamb(model.parameters(), lr=learning_rate)
+            #raise# PyTorch doesn't currently include LAMB optimizer.
     
     if fp16_run:
         global amp
@@ -339,7 +343,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     iteration = 0
     if checkpoint_path != "":
         
-        warm_start = 0 # WARM START THE MODEL AND RESET ANY INVALID LAYERS
+        #warm_start = 0 # WARM START THE MODEL AND RESET ANY INVALID LAYERS
         
         model, optimizer, iteration, scheduler = load_checkpoint(checkpoint_path, model,
                                                       optimizer, scheduler, fp16_run, warm_start=warm_start)
@@ -551,7 +555,8 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                             MSE, MAE = validate(model, loader_STFT, STFT, logger, iteration, data_config['validation_files'], speaker_lookup, sigma, output_directory, data_config)
                             if scheduler:
                                 MSE = torch.tensor(MSE, device='cuda')
-                                broadcast(MSE, 0)
+                                if num_gpus > 1:
+                                    broadcast(MSE, 0)
                                 scheduler.step(MSE.item())
                                 if MSE < best_MSE:
                                     checkpoint_path = os.path.join(output_directory, "best_val_model")
@@ -576,7 +581,9 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
         
         except LossExplosion as ex: # print Exception and continue from checkpoint. (turns out it takes < 4 seconds to restart like this, fucking awesome)
             print(ex) # print Loss
-            assert 'best_val_model' in train_config['checkpoint_path'], "Automatic restarts require checkpoint set to best_val_model"
+            if checkpoint_path == '':
+                checkpoint_path = os.path.join(output_directory, "best_val_model")
+            assert 'best_val_model' in checkpoint_path, "Automatic restarts require checkpoint set to best_val_model"
             model.eval()
             model, optimizer, iteration, scheduler = load_checkpoint(checkpoint_path, model, optimizer, scheduler, fp16_run)
             learning_rate = optimizer.param_groups[0]['lr']
