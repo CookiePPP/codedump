@@ -28,6 +28,7 @@ def create_hparams(hparams_string=None, verbose=False):
         ################################
         # Data Parameters              #
         ################################
+        check_files=False, # check all files exist, aren't corrupted, have text, good length, and other stuff before training.
         load_mel_from_disk=True,
         speakerlist='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/speaker_ids.txt',
         use_saved_speakers=True, # use the speaker lookups saved inside the model instead of generating again
@@ -109,12 +110,13 @@ def create_hparams(hparams_string=None, verbose=False):
         p_DecRNN_cell_dropout=0.00,       # 0.0 baseline
         
         # (Decoder) Attention parameters
-        attention_type=0,
-        # 0 -> Location-Based Attention (Vanilla Tacotron2)
-        # 1 -> GMMAttention (Multiheaded Long-form Synthesis)
+        attention_type=2,
+        # 0 -> Hybrid Location-Based Attention (Vanilla Tacotron2)
+        # 1 -> GMMAttention (Long-form Synthesis)
+        # 1 -> Dynamic Convolution Attention (Long-form Synthesis)
         attention_dim=128,      # 128 Layer baseline
         
-        # (Decoder) Attention Type 0 Parameters
+        # (Decoder) Attention Type 0 (and 2) Parameters
         attention_location_n_filters=32,   # 32 baseline
         attention_location_kernel_size=31, # 31 baseline
         
@@ -127,6 +129,10 @@ def create_hparams(hparams_string=None, verbose=False):
         initial_gain='relu', # initial weight distribution 'tanh','relu','sigmoid','linear'
         normalize_attention_input=True, # False baseline
         normalize_AttRNN_output=False,  # True baseline
+        
+        # (Decoder) Attention Type 2 Parameters
+        dynamic_filter_num=8, # 8 baseline
+        dynamic_filter_len=21, # 21 baseline # currently only 21 is supported
         
         # (Postnet) Mel-post processing network parameters
         postnet_embedding_dim=512,

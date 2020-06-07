@@ -18,7 +18,7 @@ def load_model(hparams):
     model = Tacotron2(hparams)
     if torch.cuda.is_available(): model = model.cuda()
     if hparams.fp16_run:
-        if hparams.attention_type == 0:
+        if hparams.attention_type in [0,2]:
             model.decoder.attention_layer.score_mask_value = finfo('float16').min
         elif hparams.attention_type == 1:
             model.decoder.attention_layer.score_mask_value = 0
@@ -58,11 +58,11 @@ class LocationLayer(nn.Module):
         self.location_dense = LinearNorm(attention_n_filters, attention_dim,
                                          bias=False, w_init_gain='tanh')
     
-    def forward(self, attention_weights_cat):
-        processed_attention = self.location_conv(attention_weights_cat)
-        processed_attention = processed_attention.transpose(1, 2)
-        processed_attention = self.location_dense(processed_attention)
-        return processed_attention
+    def forward(self, attention_weights_cat): # [B, 2, enc]
+        processed_attention = self.location_conv(attention_weights_cat) # [B, 2, enc] -> [B, n_filters, enc]
+        processed_attention = processed_attention.transpose(1, 2) # [B, n_filters, enc] -> [B, enc, n_filters]
+        processed_attention = self.location_dense(processed_attention) # [B, enc, n_filters] -> [B, enc, attention_dim]
+        return processed_attention # [B, enc, attention_dim]
 
 
 class Attention(nn.Module):
@@ -86,11 +86,11 @@ class Attention(nn.Module):
         ------
         query: decoder output (batch, n_mel_channels * n_frames_per_step)
         processed_memory: processed encoder outputs (B, T_in, attention_dim)
-        attention_weights_cat: cumulative and prev. att weights (B, 2, max_time)
+        attention_weights_cat: cumulative and prev. att weights (B, 2, enc_time)
         
         RETURNS
         -------
-        alignment (batch, max_time)
+        alignment (batch, enc_time)
         """
         
         # easy to read
@@ -132,7 +132,123 @@ class Attention(nn.Module):
         return attention_context, attention_weights
 
 
-class GMMAttention(nn.Module):
+class DynamicConvolutionAttention(nn.Module):
+    """A first attempt at making this Attention."""
+    def __init__(self, attention_rnn_dim, embedding_dim, attention_dim,
+                 attention_location_n_filters, attention_location_kernel_size,
+                 dynamic_filter_num, dynamic_filter_len): # default 8, 21)
+        super(DynamicConvolutionAttention, self).__init__()
+        self.dynamic_filter_len = dynamic_filter_len
+        self.dynamic_filter_num = dynamic_filter_num
+        
+        # static
+        self.location_layer = LocationLayer(attention_location_n_filters,
+                                            attention_location_kernel_size,
+                                            attention_dim)
+        self.v = LinearNorm(attention_dim, 1, bias=False)
+        
+        # dynamic
+        self.dynamic_filter = torch.nn.Sequential(
+            LinearNorm(attention_rnn_dim, attention_dim, bias=True, w_init_gain='tanh'), # attention_rnn_dim -> attention dim
+            nn.Tanh(),
+            LinearNorm(attention_dim, dynamic_filter_num*dynamic_filter_len, bias=False, w_init_gain='tanh'), # filter_num * filter_length
+            )
+        self.vg = LinearNorm(dynamic_filter_num, 1, bias=True)
+        
+        # prior
+        self.prior_filter = self.get_prior_filter(dynamic_filter_num, dynamic_filter_len).to("cuda")
+        
+        # misc
+        self.score_mask_value = -float("inf")
+    
+    def get_prior_filter(self, dynamic_filter_num, dynamic_filter_len):
+        assert dynamic_filter_len == 21, "Only filter_len of 21 is currently supported" # I don't know how to calcuate this one atm so here's a set of premade values I found on their Reddit post
+        prior_filters = torch.tensor( [0.7400209, 0.07474979, 0.04157422, 0.02947039, 0.023170564, 0.019321883, 0.016758798, 0.014978543, 0.013751862, 0.013028075, 0.013172861] ) # [filter_len-10]
+        prior_filters = prior_filters.flip(dims=(0,)) # [filter_len-10] -> [filter_len-10]
+        prior_filters = prior_filters[None, None, :] # [filter_len-10] -> [1, 1, filter_len-10]
+        return prior_filters
+    
+    def get_alignment_energies(self, attention_RNN_state,
+                               attention_weights_cat):
+        """
+        PARAMS
+        ------
+        attention_RNN_state: attention rnn last output [B, dim]       ## decoder output (batch, n_mel_channels * n_frames_per_step)
+        attention_weights_cat: prev and cumulative att weights (B, 2, enc_time)
+        
+        RETURNS
+        -------
+        alignment (batch, enc_time)
+        """
+        verbose = 0 # debug
+        # get Static filter intermediate value
+        processed = self.location_layer(attention_weights_cat) # [B, 2, enc_T] -> [B, attention_n_filters, enc_T] -> [B, enc_T, attention_dim] # take prev+cumulative att weights, send through conv -> linear
+        
+        # get Dynamic filter intermediate value(s)
+        prev_att = attention_weights_cat[:, 0, :][:, :, None] # [B, 2, enc_T] -> [B, enc_T] -> [B, enc_T, 1]
+        dynamic = self.dynamic_filter(attention_RNN_state) # [B, AttRNN_dim] -> [B, attention_dim] -> [B, 1, attention_dim] -> [B, 1, dynamic_filter_num*dynamic_filter_len]
+        dynamic = dynamic.view([-1, self.dynamic_filter_num, self.dynamic_filter_len]).transpose(1,2) # [B, 1, dynamic_filter_num*dynamic_filter_len] -> [B, dynamic_filter_len, dynamic_filter_num]
+        if verbose: print("1 prev_att.shape =", prev_att.shape) # [16, 90, 1]
+        if verbose: print("1 dynamic.shape =", dynamic.shape) # [16, 21, 8]
+        dynamic = prev_att.repeat(1,1,self.dynamic_filter_len) @ dynamic # [B, enc_T, dynamic_filter_len] @ [B, dynamic_filter_len, dynamic_filter_num] -> [B, enc_T, dynamic_filter_num]
+        
+        if verbose: print("2 dynamic.shape =", dynamic.shape) # [16, 90, 8]
+        
+        # I don't currently know how the Dynamic and Static energies are meant to interact (I can't tell from the paper).
+        if False: # first try addition
+            energies = self.v( torch.tanh( processed + dynamic ) ) # [B, enc_T, attention_dim] -> [B, enc_T, 1] # mix them
+        elif False: # then try concatentation
+            proc = torch.cat( (processed, dynamic), dim=2)
+            energies = self.v( torch.tanh( proc ) ) # [B, enc_T, attention_dim] -> [B, enc_T, 1] # mix them
+        elif True: # then try adding seperated energies
+            static_energies = self.v( torch.tanh( processed ) ) # [B, enc_T, attention_dim] -> [B, enc_T, 1] # mix them
+            if verbose: print("static_energies.shape =", static_energies.shape)
+            dynamic_energies = self.vg( torch.tanh(dynamic) ) # [B, enc_T, dynamic_filter_num] -> [B, enc_T, 1] # mix them
+            if verbose: print("dynamic_energies.shape =", dynamic_energies.shape)
+            energies = static_energies + dynamic_energies # [B, enc_T, 1] + [B, enc_T, 1] -> [B, enc_T, 1]
+        else:
+            pass
+        
+        # add the Prior filter
+        padd = self.dynamic_filter_len - 11
+        prev_att = F.pad(prev_att.transpose(1,2), (padd, 0)) # [B, enc_T, 1] -> [B, 1, enc_T] -> [B, 1, enc_T+padd]
+        prior_energy = F.conv1d(prev_att, self.prior_filter.to(prev_att.dtype)) # [B, 1, enc_T+padd] -> [B, 1, enc_T]
+        prior_energy = (prior_energy+1e-6).log() # [B, enc_T, 1] add a small value so log doesn't underflow
+        prior_energy = prior_energy.clamp(min=1e-6)
+        #prior_energy = prior_energy.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T]
+        
+        if verbose: print("3 energies.shape =", energies.shape) #
+        if verbose: print("3 prior_energy.shape =", prior_energy.shape) #
+        
+        energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
+        
+        return energies.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T] # squeeze blank dim
+
+    def forward(self, attention_RNN_state, attention_weights_cat, memory, mask, attention_weights=None):
+        """
+        PARAMS
+        ------
+        attention_hidden_state: attention rnn last output
+        memory: encoder outputs
+        processed_memory: processed encoder outputs
+        attention_weights_cat: previous and cummulative attention weights
+        mask: binary mask for padded data
+        """
+        if attention_weights is None:
+            alignment = self.get_alignment_energies(
+                attention_RNN_state, attention_weights_cat) # outputs [B, enc_T]
+            
+            if mask is not None:
+                alignment.data.masked_fill_(mask, self.score_mask_value)
+            
+            attention_weights = F.softmax(alignment, dim=1) # softmax
+        attention_context = torch.bmm(attention_weights.unsqueeze(1), memory) # unsqueeze, bmm
+        attention_context = attention_context.squeeze(1) # squeeze
+        
+        return attention_context, attention_weights
+
+
+class GMMAttention(nn.Module): # Experimental from NTT123
     def __init__(self, num_mixtures, attention_layers, attention_rnn_dim, embedding_dim, attention_dim,
                  attention_location_n_filters, attention_location_kernel_size, hparams):
         super(GMMAttention, self).__init__()
@@ -477,6 +593,12 @@ class Decoder(nn.Module):
                 hparams.attention_rnn_dim, self.encoder_LSTM_dim,
                 hparams.attention_dim, hparams.attention_location_n_filters,
                 hparams.attention_location_kernel_size, hparams)
+        elif self.attention_type == 2:
+            self.attention_layer = DynamicConvolutionAttention(
+                hparams.attention_rnn_dim, self.encoder_LSTM_dim,
+                hparams.attention_dim, hparams.attention_location_n_filters,
+                hparams.attention_location_kernel_size,
+                hparams.dynamic_filter_num, hparams.dynamic_filter_len)
         else:
             print("attention_type invalid, valid values are... 0 and 1")
             raise
@@ -587,7 +709,7 @@ class Decoder(nn.Module):
         
         self.memory = memory
         if self.attention_type == 0:
-            self.processed_memory = self.attention_layer.memory_layer(memory) # encoder outputs -> attention layer inputs
+            self.processed_memory = self.attention_layer.memory_layer(memory) # Linear Layer, [B, enc_T, enc_dim] -> [B, enc_T, attention_dim]
         elif self.attention_type == 1:
             self.previous_location = Variable(memory.data.new(
                 B, 1, self.num_att_mixtures).zero_())
@@ -687,6 +809,9 @@ class Decoder(nn.Module):
         elif self.attention_type == 1:
             self.attention_context, self.attention_weights, self.previous_location = self.attention_layer(
                 self.attention_hidden, self.memory, self.previous_location, self.mask)
+        elif self.attention_type == 2:
+            self.attention_context, self.attention_weights = self.attention_layer( # attention_context is the encoder output that is to be used at the current frame(?)
+                self.attention_hidden, attention_weights_cat, self.memory, self.mask, attention_weights)
         else:
             raise NotImplementedError(f"Attention Type {self.attention_type} Invalid")
         
