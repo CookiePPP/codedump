@@ -48,7 +48,7 @@ class LSTMCellWithZoneout(nn.LSTMCell):
 
 class LocationLayer(nn.Module):
     def __init__(self, attention_n_filters, attention_kernel_size,
-                 attention_dim):
+                 attention_dim, out_bias=False):
         super(LocationLayer, self).__init__()
         padding = int((attention_kernel_size - 1) / 2)
         self.location_conv = ConvNorm(2, attention_n_filters,
@@ -56,7 +56,7 @@ class LocationLayer(nn.Module):
                                       padding=padding, bias=False, stride=1,
                                       dilation=1)
         self.location_dense = LinearNorm(attention_n_filters, attention_dim,
-                                         bias=False, w_init_gain='tanh')
+                                         bias=out_bias, w_init_gain='tanh')
     
     def forward(self, attention_weights_cat): # [B, 2, enc]
         processed_attention = self.location_conv(attention_weights_cat) # [B, 2, enc] -> [B, n_filters, enc]
@@ -144,13 +144,13 @@ class DynamicConvolutionAttention(nn.Module):
         # static
         self.location_layer = LocationLayer(attention_location_n_filters,
                                             attention_location_kernel_size,
-                                            attention_dim)
+                                            attention_dim, out_bias=True)
         self.v = LinearNorm(attention_dim, 1, bias=False)
         
         # dynamic
         self.dynamic_filter = torch.nn.Sequential(
             LinearNorm(attention_rnn_dim, attention_dim, bias=True, w_init_gain='tanh'), # attention_rnn_dim -> attention dim
-            nn.Tanh(),
+            nn.Tanh(),#nn.ReLU(),#nn.LeakyReLU(negative_slope=0.1),
             LinearNorm(attention_dim, dynamic_filter_num*dynamic_filter_len, bias=False, w_init_gain='tanh'), # filter_num * filter_length
             )
         self.vg = LinearNorm(dynamic_filter_num, 1, bias=True)
@@ -187,7 +187,7 @@ class DynamicConvolutionAttention(nn.Module):
         # get Dynamic filter intermediate value(s)
         prev_att = attention_weights_cat[:, 0, :][:, :, None] # [B, 2, enc_T] -> [B, enc_T] -> [B, enc_T, 1]
         dynamic = self.dynamic_filter(attention_RNN_state) # [B, AttRNN_dim] -> [B, attention_dim] -> [B, 1, attention_dim] -> [B, 1, dynamic_filter_num*dynamic_filter_len]
-        dynamic = dynamic.view([-1, self.dynamic_filter_num, self.dynamic_filter_len]).transpose(1,2) # [B, 1, dynamic_filter_num*dynamic_filter_len] -> [B, dynamic_filter_len, dynamic_filter_num]
+        dynamic = dynamic.view([-1, self.dynamic_filter_len, self.dynamic_filter_num]) # [B, 1, dynamic_filter_num*dynamic_filter_len] -> [B, dynamic_filter_len, dynamic_filter_num]
         if verbose: print("1 prev_att.shape =", prev_att.shape) # [16, 90, 1]
         if verbose: print("1 dynamic.shape =", dynamic.shape) # [16, 21, 8]
         dynamic = prev_att.repeat(1,1,self.dynamic_filter_len) @ dynamic # [B, enc_T, dynamic_filter_len] @ [B, dynamic_filter_len, dynamic_filter_num] -> [B, enc_T, dynamic_filter_num]
@@ -195,10 +195,10 @@ class DynamicConvolutionAttention(nn.Module):
         if verbose: print("2 dynamic.shape =", dynamic.shape) # [16, 90, 8]
         
         # I don't currently know how the Dynamic and Static energies are meant to interact (I can't tell from the paper).
-        if False: # first try addition
+        if True: # first try addition
             energies = self.v( torch.tanh( processed + dynamic ) ) # [B, enc_T, attention_dim] -> [B, enc_T, 1] # mix them
-        elif False: # then try concatentation
-            proc = torch.cat( (processed, dynamic), dim=2)
+        elif True: # then try concatentation
+            proc = torch.cat( (processed, dynamic), dim=2) # [B, enc_T, dynamic_filter_num] + [B, enc_T, attention_dim] -> [B, enc_T, dynamic_filter_num+attention_dim]
             energies = self.v( torch.tanh( proc ) ) # [B, enc_T, attention_dim] -> [B, enc_T, 1] # mix them
         elif True: # then try adding seperated energies
             static_energies = self.v( torch.tanh( processed ) ) # [B, enc_T, attention_dim] -> [B, enc_T, 1] # mix them
@@ -213,14 +213,14 @@ class DynamicConvolutionAttention(nn.Module):
         padd = self.dynamic_filter_len - 11
         prev_att = F.pad(prev_att.transpose(1,2), (padd, 0)) # [B, enc_T, 1] -> [B, 1, enc_T] -> [B, 1, enc_T+padd]
         prior_energy = F.conv1d(prev_att, self.prior_filter.to(prev_att.dtype)) # [B, 1, enc_T+padd] -> [B, 1, enc_T]
-        prior_energy = (prior_energy+1e-6).log() # [B, enc_T, 1] add a small value so log doesn't underflow
-        prior_energy = prior_energy.clamp(min=1e-6)
+        prior_energy = (prior_energy.clamp(min=1e-6)).log() # [B, enc_T, 1] clamp min value so log doesn't underflow
+        #prior_energy = prior_energy.clamp(min=1e-6)
         #prior_energy = prior_energy.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T]
         
         if verbose: print("3 energies.shape =", energies.shape) #
         if verbose: print("3 prior_energy.shape =", prior_energy.shape) #
         
-        energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
+        #energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
         
         return energies.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T] # squeeze blank dim
 
@@ -699,6 +699,10 @@ class Decoder(nn.Module):
             self.attention_weights.detach_()
             self.attention_weights_cum *= preserve
             self.attention_weights_cum.detach_()
+        
+        if self.attention_type == 2: # Dynamic Convolution Attention
+            self.attention_weights[:, 0] = 1 # initialize the weights at encoder step 0
+            self.attention_weights_cum[:, 0] = 1 # initialize the weights at encoder step 0
         
         if hasattr(self, 'attention_context') and preserve is not None:
             self.attention_context *= preserve

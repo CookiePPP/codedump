@@ -69,6 +69,9 @@
             },
             "Tacotron2 Torchmoji v0.22.1 (Large Prenet 188K)": {
                 "modelpath": "outdir_truncated1/checkpoint_188000_weights"
+            },
+            "Tacotron2 Torchmoji v0.22.2 (Dynamic Convolution Attention 188K+3K)": {
+                "modelpath": "outdir_DCA/checkpoint_3013"
             }
         }
     },

@@ -14,7 +14,7 @@ def create_hparams(hparams_string=None, verbose=False):
         iters_per_validation=2000,
         seed=1234,
         dynamic_loss_scaling=True,
-        fp16_run=True,
+        fp16_run=False,
         distributed_run=True,
         dist_backend="nccl",
         dist_url="tcp://127.0.0.1:54321",
@@ -114,7 +114,7 @@ def create_hparams(hparams_string=None, verbose=False):
         # 0 -> Hybrid Location-Based Attention (Vanilla Tacotron2)
         # 1 -> GMMAttention (Long-form Synthesis)
         # 1 -> Dynamic Convolution Attention (Long-form Synthesis)
-        attention_dim=128,      # 128 Layer baseline
+        attention_dim=8,      # 128 Layer baseline
         
         # (Decoder) Attention Type 0 (and 2) Parameters
         attention_location_n_filters=32,   # 32 baseline
@@ -174,8 +174,8 @@ def create_hparams(hparams_string=None, verbose=False):
         learning_rate=0.1e-5,
         weight_decay=1e-6,
         grad_clip_thresh=1.0,
-        batch_size=32,
-        val_batch_size=32, # for more precise comparisons between models, constant batch_size is useful
+        batch_size=24,
+        val_batch_size=24, # for more precise comparisons between models, constant batch_size is useful
         use_TBPTT=True,
         truncated_length=1000, # max mel length till truncation.
         mask_padding=True,#mask values by setting them to the same values in target and predicted
