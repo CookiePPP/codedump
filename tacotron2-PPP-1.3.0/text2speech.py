@@ -97,7 +97,7 @@ def parse_text_into_segments(texts, split_at_quotes=True, target_segment_length=
     # clean up and remove empty texts
     def clean_text(text):
         text = text.strip()
-        text = text.replace("\n"," ").replace("  "," ").replace("> --------------------------------------------------------------------------","")
+        text = text.replace("\n"," ").replace("  "," ").replace("> --------------------------------------------------------------------------","").replace("------------------------------------","")
         return text
     texts = [clean_text(text) for text in texts if len(text.strip().replace('"','').strip()) or len(clean_text(text))]
     assert len(texts)
@@ -395,14 +395,17 @@ class T2S:
             scores = []
             
             # Score Parameters
-            diagonality_weighting = 0.5 # 'varibility factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
+            diagonality_weighting = 0.5 # 'pacing factor', a penalty for clips where the model pace changes often/rapidly. # this thing does NOT work well for Rarity.
             max_focus_weighting = 1.0   # 'stuck factor', a penalty for clips that spend execisve time on the same letter.
-            min_focus_weighting = 0.25  # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
+            min_focus_weighting = 1.0   # 'miniskip factor', a penalty for skipping/ignoring single letters in the input text.
             avg_focus_weighting = 1.0   # 'skip factor', a penalty for skipping very large parts of the input text
             
             # add a filename prefix to keep multiple requests seperate
             if not filename_prefix:
                 filename_prefix = str(time.time())
+            
+            # add output filename
+            output_filename = f"{filename_prefix}_output"
             
             # split the text into chunks (if applicable)
             if textseg_mode == 'no_segmentation':
@@ -445,18 +448,26 @@ class T2S:
             else:
                 raise NotImplementedError(f"batch_mode of {batch_mode} is invalid.")
             
+            # for size merging
+            running_fsize = 0
+            fpaths = []
+            out_count = 0
+            
+            # keeping track of stats for html/terminal
             show_inference_progress_start = time.time()
             continue_from = 0
             counter = 0
             total_specs = 0
             n_passes = 0
+            
             text_batch_in_progress = []
             for text_index, text in enumerate(texts):
                 if text_index < continue_from: print(f"Skipping {text_index}.\t",end=""); counter+=1; continue
+                last_text = (text_index == (total_len-1)) # true if final text input
                 
                 # setup the text batches
                 text_batch_in_progress.append(text)
-                if (len(text_batch_in_progress) == simultaneous_texts) or (text_index == (total_len-1)): # if text batch ready or final input
+                if (len(text_batch_in_progress) == simultaneous_texts) or last_text: # if text batch ready or final input
                     text_batch = text_batch_in_progress
                     text_batch_in_progress = []
                 else:
@@ -597,7 +608,7 @@ class T2S:
                                 weighted_score =  avg_prob.item() # general alignment quality
                                 diagonality_punishment = (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # smooth pacing
                                 max_focus_punishment = max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
-                                min_focus_punishment = max(0.4-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
+                                min_focus_punishment = max(0.25-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
                                 avg_focus_punishment = max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
                                 weighted_score -= (diagonality_punishment + max_focus_punishment + min_focus_punishment + avg_focus_punishment)
                                 score_str = f"{round(diagonality.item(),3)} {round(avg_prob.item()*100,2)}% {round(weighted_score,4)} {round(max_focus_punishment,2)} {round(min_focus_punishment,2)} {round(avg_focus_punishment,2)}|"
@@ -651,6 +662,9 @@ class T2S:
                 if status_updates:
                     print('Done')
                 
+                
+                # write audio files and any stats
+                audio_bs = audio_batch.size(0)
                 for j, (audio, audio_denoised) in enumerate(zip(audio_batch.split(1, dim=0), audio_denoised_batch.split(1, dim=0))):
                     # remove WaveGlow padding
                     audio_end = max_lengths[j] * self.tt_hparams.hop_length
@@ -686,6 +700,48 @@ class T2S:
                     
                     counter+=1
                     audio_len+=audio_end
+                    
+                    # ------ merge clips of 300 ------ #
+                    last_item = (j == audio_bs-1)
+                    if (counter % 300) == 0 or (last_text and last_item): # if 300th file or last item of last batch.
+                        i = (counter- 1)//300
+                        # merge batch of 300 files together
+                        print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
+                        fpath = os.path.join(self.conf['working_directory'], f"{filename_prefix}_concat_{i:04}.wav")
+                        files_to_merge = os.path.join(self.conf["working_directory"], f"{filename_prefix}_{i:04}_*.wav")
+                        os.system(f'sox "{files_to_merge}" -b 16 "{fpath}"')
+                        assert os.path.exists(fpath), f"'{fpath}' failed to generate."
+                        del files_to_merge
+                        
+                        # delete the original 300 files
+                        print("Cleaning up remaining temp files... ", end="")
+                        tmp_files = [fp for fp in glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_{i:04}_*.wav")) if "output" not in fp]
+                        _ = [os.remove(fp) for fp in tmp_files]
+                        print("Done")
+                        
+                        # add merged file to final output(s)
+                        fsize = os.stat(fpath).st_size
+                        running_fsize += fsize
+                        fpaths += [fpath,]
+                        if ( running_fsize/(1024**3) > self.conf['output_maxsize_gb'] ) or (len(fpaths) > 300) or (last_text and last_item): # if (total size of fpaths is > 2GB) or (more than 300 inputs) or (last item of last batch): save as output
+                            fpath_str = '"'+'" "'.join(fpaths)+'"' # chain together fpaths in string for SoX input
+                            output_extension = self.conf['sox_output_ext']
+                            if output_extension[0] != '.':
+                                output_extension = f".{output_extension}"
+                            out_name = f"{output_filename}_{out_count:02}{output_extension}"
+                            out_path = os.path.join(self.conf['output_directory'], out_name)
+                            os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
+                            
+                            if running_fsize >= (os.stat(out_path).st_size - 1024): # if output seems to have correctly generated.
+                                print("Cleaning up merged temp files... ", end="") # delete the temp files and keep the output
+                                _ = [os.remove(fp) for fp in fpaths]
+                                print("Done")
+                            
+                            running_fsize = 0
+                            out_count+=1
+                            fpaths = []
+                    # ------ // merge clips of 300 // ------ #
+                    #end of writing loop
                 
                 if self.conf['show_inference_alignment_scores']:
                     for k, bs in enumerate(best_score):
@@ -710,47 +766,6 @@ class T2S:
                     print(f"Generated {audio_seconds_generated}s of audio in {time_to_gen}s wall time - so far. (best of {tries.sum().astype('int')} tries this pass)")
                 
                 print("\n") # seperate each pass
-            
-            # ------ merge clips ------ #
-            output_filename = f"{filename_prefix}_output"
-            n_audio_batches = -(-len( glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_*_*.wav")) ) // 300)# get number of intermediate concatenations required (Sox can only merge 340~ files at a time)
-            
-            running_fsize = 0
-            fpaths = []
-            out_count = 0
-            for i in range(n_audio_batches):
-                # merge batch of 300 files together
-                print(f"Merging audio files {i*300} to {((i+1)*300)-1}... ", end='')
-                fpath = os.path.join(self.conf['working_directory'], f"{filename_prefix}_concat_{i:04}.wav")
-                os.system(f'sox {os.path.join(self.conf["working_directory"], f"{filename_prefix}_{i:04}_*.wav")} -b 16 {fpath}')
-                
-                # delete the original 300 files
-                print("Cleaning up remaining temp files... ", end="")
-                tmp_files = [fp for fp in glob(os.path.join(self.conf['working_directory'], f"{filename_prefix}_{i:04}_*.wav")) if "output" not in fp]
-                _ = [os.remove(fp) for fp in tmp_files]
-                print("Done")
-                
-                # add merged file to final output(s)
-                fsize = os.stat(fpath).st_size
-                running_fsize += fsize
-                fpaths += [fpath,]
-                if running_fsize/(1024**3) > 2.0 or (i+1) == n_audio_batches or (len(fpaths) > 300): # if total size of fpaths is > 2GB or at final file: save as output
-                    fpath_str = '"'+'" "'.join(fpaths)+'"' # chain together fpaths in string for SoX input
-                    output_extension = self.conf['sox_output_ext']
-                    if output_extension[0] != '.':
-                        output_extension = f".{output_extension}"
-                    out_name = f"{output_filename}_{out_count:02}{output_extension}"
-                    out_path = os.path.join(self.conf['output_directory'], out_name)
-                    os.system(f'sox {fpath_str} -b 16 "{out_path}"') # merge the merged files into final outputs. bit depth of 16 useful to stay in the 32bit duration limit
-                    
-                    if running_fsize >= (os.stat(out_path).st_size - 1024): # if output seems to have correctly generated.
-                        print("Cleaning up merged temp files... ", end="") # delete the temp files and keep the output
-                        _ = [os.remove(fp) for fp in fpaths]
-                        print("Done")
-                    
-                    running_fsize = 0
-                    out_count+=1
-                    fpaths = []
         
         scores = np.stack(scores)
         avg_score = np.mean(scores)

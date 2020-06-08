@@ -7,6 +7,7 @@
     "sox_output_ext": "flac",
     "working_directory": "server_infer",
     "output_directory": "server_infer_done",
+    "output_maxsize_gb": 0.01,
     "tacotron": {
         "speaker_ids_file": "H:/ClipperDatasetV2/filelists/speaker_ids.txt",
         "use_speaker_ids_file_override": true,
