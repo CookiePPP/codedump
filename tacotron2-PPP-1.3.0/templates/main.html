@@ -53,8 +53,8 @@
 
     <div class="w-50 p-3 ml-3" style="margin: auto auto!important;">
         <a href="/">Home/Reset</a>
-
-
+        <div style="float: right;">Send Feedback to <a href="mailto:cookietriplep@gmail.com" title="You can send whatever to this email, I reply to about 50% of what comes in.">cookietriplep@gmail.com</a></div>
+        
         <div id="content" class="jumbotron">
             <h1 class="display-4">Text To Speech </h1>
             <p class="lead">Based on NVIDIA Tacotron2 and WaveGlow TTS models.</p>
@@ -157,7 +157,7 @@
                     <label for="select">Text</label>
                     <textarea class="form-control" id="text_area" name="input_text" placeholder="{{sample_text}}"
                         cols="40" rows="8" {{"maxlength="+max_input_length if max_input_length else ""}} onload="textCounter(this,'text_count');" oninput="textCounter(this,'text_count');">{{current_text}}</textarea>
-                    <input class="form-control" disabled maxlength="9" size="6" value={{max_input_length}} id="text_count" style="border: 0px; height: auto; width: auto; padding-top: 0px; float: right; background: transparent;">
+                    <input class="form-control" disabled maxlength="9" size="6" value={{max_input_length}} id="text_count" style="border: 0px; height: auto; width: auto; padding-top: 0px; float: right; background: transparent;" title="Remaining Characters">
                 </div>
                 <div id="btns" class="form-group">
                     <input id="btn" type="submit" class="btn btn-primary mb-2" value="Generate" />
@@ -185,6 +185,17 @@
                     <p style="zoom: 0.7;">Average score was {{avg_score}}</p>
                 </div>
                 {% endif %}
+            </div>
+            <button class="collapsible active" type="button" style="background-color: #e9ecef;color: #212529;border: 1px solid #d1d4d7;">Credits</button>
+            <div class="form-group content">
+                <ul style="margin-top: 0.5em;">
+                    <li style=""><a href="https://github.com/NVIDIA/tacotron2">Tacotron2</a> and <a href="https://github.com/yoyololicon/constant-memory-waveglow">WaveGlow</a> models trained and modified by <b>Cookie</b></li>
+                    <li style="">Website written/adapted from <a href="https://github.com/Verssae/flask-tacotron2-tts-web-app">Verssae</a> by <b>Cookie</b></li>
+                    <li style="">Initial <a href="https://github.com/Twibot-ai/audio_proj_utils">Dataset Processing</a> and technical help from <b>Twibot</b></li>
+                    <li style=""><b>Clipper</b> (and <b>many</b> anons) who labeled, cleaned, sourced and curated the amazing My Little Pony Dataset used.</li>
+                    <li style=""><b>Synthbot</b> who is much better at maths than me.</li><li style=""><b>Synthbot</b> who hosts phoneticly aligned and cleaned up copies of the Dataset for anyone to use.</li>
+                    <li style=""><b>15</b> who provides glimpses into the future, then does little to help us achive it.</li>
+                </ul>
             </div>
         </div>
         <script>
