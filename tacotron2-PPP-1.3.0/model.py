@@ -183,16 +183,40 @@ class DynamicConvolutionAttention(nn.Module):
         verbose = 0 # debug
         # get Static filter intermediate value
         processed = self.location_layer(attention_weights_cat) # [B, 2, enc_T] -> [B, attention_n_filters, enc_T] -> [B, enc_T, attention_dim] # take prev+cumulative att weights, send through conv -> linear
+        if verbose: print("1 processed.shape =", processed.shape) # [16, 90, 1]
         
         # get Dynamic filter intermediate value(s)
         prev_att = attention_weights_cat[:, 0, :][:, :, None] # [B, 2, enc_T] -> [B, enc_T] -> [B, enc_T, 1]
-        dynamic = self.dynamic_filter(attention_RNN_state) # [B, AttRNN_dim] -> [B, attention_dim] -> [B, 1, attention_dim] -> [B, 1, dynamic_filter_num*dynamic_filter_len]
-        dynamic = dynamic.view([-1, self.dynamic_filter_len, self.dynamic_filter_num]) # [B, 1, dynamic_filter_num*dynamic_filter_len] -> [B, dynamic_filter_len, dynamic_filter_num]
+        dynamic_filt = self.dynamic_filter(attention_RNN_state) # [B, AttRNN_dim] -> [B, attention_dim] -> [B, 1, attention_dim] -> [B, 1, dynamic_filter_num*dynamic_filter_len]
+        dynamic_filt = dynamic_filt.view([-1, self.dynamic_filter_len, self.dynamic_filter_num]) # [B, 1, dynamic_filter_num*dynamic_filter_len] -> [B, dynamic_filter_len, dynamic_filter_num]
         if verbose: print("1 prev_att.shape =", prev_att.shape) # [16, 90, 1]
-        if verbose: print("1 dynamic.shape =", dynamic.shape) # [16, 21, 8]
-        dynamic = prev_att.repeat(1,1,self.dynamic_filter_len) @ dynamic # [B, enc_T, dynamic_filter_len] @ [B, dynamic_filter_len, dynamic_filter_num] -> [B, enc_T, dynamic_filter_num]
+        if verbose: print("1 dynamic_filt.shape =", dynamic_filt.shape) # [16, 21, 8]
         
-        if verbose: print("2 dynamic.shape =", dynamic.shape) # [16, 90, 8]
+        if False: # calc dynamic energies from matmul with dynamic filter
+            # "stack previous alignments into matrices" # https://www.reddit.com/r/MachineLearning/comments/dmo0z1/r_attenchilada_locationrelative_attention/f6vtkmk/
+            prev_att_stacked = prev_att.repeat(1,1,self.dynamic_filter_len)
+            
+            dynamic = prev_att_stacked @ dynamic_filt # [B, enc_T, dynamic_filter_len] @ [B, dynamic_filter_len, dynamic_filter_num] -> [B, enc_T, dynamic_filter_num]
+        else:  # calc dynamic engeries from F.conv1d with dynamic filter
+            dynamic_filt = dynamic_filt.permute(2,0,1)[:,:,None,:] # [B, dynamic_filter_len, dynamic_filter_num] -> [dynamic_filter_num,B                 ,1, dynamic_filter_len]
+                                                                                                                   #(out_channels,     ,in_channels/groups,kH,kW                )
+            
+            if verbose: print("1.9 dynamic_filt.shape =", dynamic_filt.shape) # [8, 24, 1, 21]
+            shape = dynamic_filt.shape
+            dynamic_filt = dynamic_filt.reshape(shape[0]*shape[1], 1, 1, shape[-1]) # [dynamic_filter_num,B,1, dynamic_filter_len] -> [dynamic_filter_num*B,1,1, dynamic_filter_len]
+            
+            prev_att_shaped = prev_att[None, ...].permute(0, 1, 3, 2) # [B, enc_T, 1] -> [1, B, enc_T, 1] -> [1        ,B          ,1 ,enc_T]
+                                                                                                     #(minibatch,in_channels,iH,iW   )
+            
+            if verbose: print("2 prev_att_shaped.shape =", prev_att_shaped.shape) # [1, 24, 1, 65] -> [24, 8, 1, 65]
+            if verbose: print("2 dynamic_filt.shape =", dynamic_filt.shape) # [8, 24, 1, 21]
+            #prev_att_padd = F.pad(prev_att_shaped, (padd, 0)) # [1, 1, B, enc_T] -> [1, 1, B, padd+enc_T]
+            padd = (self.dynamic_filter_len-1)//2
+            dynamic = torch.nn.functional.conv2d(prev_att_shaped, dynamic_filt, bias=None, stride=1, padding=(0,padd), dilation=1, groups=prev_att_shaped.size(1))# [1, B, 1, enc_T] -> [1, B*dyna_f_num, 1, enc_T]
+            if verbose: print("2 dynamic.shape =", dynamic.shape) # [1, 8, 1, 65]
+            dynamic = dynamic.view(shape[1], shape[0], -1).transpose(1,2) # [1, B*dyna_f_num, 1, enc_T] -> [B, dyna_f_num, enc_T] -> [B, enc_T, dyna_f_num]
+        
+        if verbose: print("2.1 dynamic.shape =", dynamic.shape) # [1, 8, 1, 65]
         
         # I don't currently know how the Dynamic and Static energies are meant to interact (I can't tell from the paper).
         if True: # first try addition
@@ -220,7 +244,7 @@ class DynamicConvolutionAttention(nn.Module):
         if verbose: print("3 energies.shape =", energies.shape) #
         if verbose: print("3 prior_energy.shape =", prior_energy.shape) #
         
-        #energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
+        energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
         
         return energies.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T] # squeeze blank dim
 
@@ -699,8 +723,10 @@ class Decoder(nn.Module):
             self.attention_weights.detach_()
             self.attention_weights_cum *= preserve
             self.attention_weights_cum.detach_()
-        
-        if self.attention_type == 2: # Dynamic Convolution Attention
+            if self.attention_type == 2: # Dynamic Convolution Attention
+                    self.attention_weights[:, 0] = ~preserve.bool()[:,0] # [B, 1] -> [B] # initialize the weights at encoder step 0
+                    self.attention_weights_cum[:, 0] = ~preserve.bool()[:,0] # [B, 1] -> [B] # initialize the weights at encoder step 0
+        elif self.attention_type == 2:
             self.attention_weights[:, 0] = 1 # initialize the weights at encoder step 0
             self.attention_weights_cum[:, 0] = 1 # initialize the weights at encoder step 0
         
