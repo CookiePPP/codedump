@@ -5,7 +5,7 @@ import torch
 
 def get_mask_from_lengths(lengths):
     max_len = torch.max(lengths)
-    ids = torch.arange(0, max_len).long().cuda()
+    ids = torch.arange(0, max_len).long().to(xm.xla_device())
     mask = (ids < lengths.unsqueeze(1)).byte()
     return mask
 

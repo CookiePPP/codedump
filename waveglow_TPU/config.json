@@ -1,22 +1,27 @@
 {
     "train_config": {
         "fp16_run": true,
-        "output_directory": "outdir_NancyOnly",
+        "output_directory": "waveflow/LargeBaseline",
         "epochs": 1000,
-        "learning_rate": 1e-4,
+        "learning_rate": 20e-4,
         "sigma": 1.0,
+        "loss_empthasis": 0.0,
         "iters_per_checkpoint": 20000,
-        "batch_size": 5,
+        "batch_size": 1,
         "seed": 1234,
-        "checkpoint_path": "outdir_NancyOnly/best_model",
+        "checkpoint_path": "",
         "with_tensorboard": true,
-        "logdirname": "logs_12Flow_256Channel_8Layer_24Group_4EarlyEvery_3Kernel",
-        "datedlogdir": false
+        "logdirname": "logs",
+        "datedlogdir": true,
+        "warm_start": true
     },
     "data_config": {
-        "training_files": "map_0_GT_NancyOnly.txt",
-        "validation_files": "map_0_GT_Val.txt",
-        "validation_windows": [1200, 2400],
+        "training_files": "/media/cookie/Samsung PM961/TwiBot/tacotron2-PPP-1.3.0/GTA_flist/map_train_0.txt",
+        "validation_files": "/media/cookie/Samsung PM961/TwiBot/tacotron2-PPP-1.3.0/GTA_flist/map_val_0.txt",
+        "validation_windows": [
+            1200,
+            2400
+        ],
         "segment_length": 24000,
         "sampling_rate": 48000,
         "filter_length": 2400,
@@ -24,7 +29,7 @@
         "win_length": 2400,
         "mel_fmin": 0.0,
         "mel_fmax": 16000.0,
-        "load_mel_from_disk": true,
+        "load_mel_from_disk": 0.5,
         "preempthasis": 0.00
     },
     "dist_config": {
@@ -32,20 +37,46 @@
         "dist_url": "tcp://127.0.0.1:54321"
     },
     "waveglow_config": {
-        "yoyo": false,
+        "yoyo": true,
+        "yoyo_WN": false,
         "n_mel_channels": 160,
-        "n_flows": 12,
-        "n_group": 24,
-        "n_early_every": 4,
+        "channel_mixing": "permute",
+        "n_flows": 8,
+        "n_group": 20,
+        "n_early_every": 16,
         "n_early_size": 2,
-        "memory_efficient": false,
+        "memory_efficient": 0.0,
         "spect_scaling": false,
         "upsample_mode": "normal",
         "WN_config": {
-            "n_layers": 8,
+            "n_layers": 7,
             "n_channels": 256,
-            "kernel_size": 3,
-            "rezero": false
-        }
+            "kernel_size_w": 7,
+            "kernel_size_h": 7,
+            "n_layers_dilations_w": [1,2,4,8,16,32,64,128],
+            "n_layers_dilations_h": 1,
+            "speaker_embed_dim": 96,
+            "rezero": false,
+            "cond_layers": 3,
+            "cond_activation_func": "lrelu",
+            "negative_slope": 0.5,
+            "cond_hidden_channels": 256,
+            "cond_padding_mode": "replicate",
+            "seperable_conv": true,
+            "merge_res_skip": true,
+            "upsample_mode": "linear",
+            "cond_kernel_size": 1
+        },
+        "speaker_embed": 96,
+        "cond_layers": 3,
+        "cond_activation_func": "lrelu",
+        "negative_slope": 0.5,
+        "cond_hidden_channels": 256,
+        "cond_output_channels": 256,
+        "cond_residual": true,
+        "cond_res_rezero": true,
+        "cond_padding_mode": "replicate",
+        "upsample_first": false,
+        "cond_kernel_size": 2
     }
 }

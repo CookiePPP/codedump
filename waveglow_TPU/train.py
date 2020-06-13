@@ -28,6 +28,8 @@ import argparse
 import json
 import os
 import torch
+import torch_xla
+import torch_xla.core.xla_model as xm
 import os.path
 import sys
 import time
@@ -116,9 +118,6 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, fp16_run, warm
 def save_checkpoint(model, optimizer, learning_rate, iteration, amp, scheduler, speaker_lookup, filepath):
     tqdm.write("Saving model and optimizer state at iteration {} to {}".format(
           iteration, filepath))
-    #model_for_saving = WaveGlow(**waveglow_config).cuda()
-    #model_for_saving.load_state_dict(model.state_dict())
-    #state_dict = model_for_saving.state_dict()
     state_dict = model.state_dict()
     saving_dict = {'model': state_dict,
         'iteration': iteration,
@@ -129,13 +128,13 @@ def save_checkpoint(model, optimizer, learning_rate, iteration, amp, scheduler, 
         'waveglow_config': waveglow_config,
         }
     if amp: saving_dict['amp'] = amp.state_dict()
-    torch.save(saving_dict, filepath)
+    xm.save(saving_dict, filepath)
     tqdm.write("Model Saved")
 
 def save_weights(model, optimizer, learning_rate, iteration, filepath):
     print("Saving model weights without optimizer at iteration {} to {}".format(
           iteration, filepath))
-    model_for_saving = WaveGlow(**waveglow_config).cuda()
+    model_for_saving = WaveGlow(**waveglow_config).to(xm.xla_device())
     model_for_saving.load_state_dict(model.state_dict())
     #torch.save(model_for_saving.state_dict(), filepath)
     torch.save({'model': model_for_saving,
@@ -165,10 +164,10 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             if audio.shape[0] > (data_config['sampling_rate']*max_length_s): continue # ignore audio over max_length_seconds
             
             if loader_STFT:
-                mel = loader_STFT.mel_spectrogram(audio.unsqueeze(0)).cuda()
+                mel = loader_STFT.mel_spectrogram(audio.unsqueeze(0)).to(xm.xla_device())
             else:
                 mel = np.load(melpath) # load mel from file into numpy arr
-                mel = torch.from_numpy(mel).unsqueeze(0).cuda() # from numpy arr to tensor on GPU
+                mel = torch.from_numpy(mel).unsqueeze(0).to(xm.xla_device()) # from numpy arr to tensor on GPU
             
             if hasattr(model, 'multispeaker') and model.multispeaker == True:
                 assert len(remaining), f"Speaker ID missing while multispeaker == True.\nLine: {i}\n'{'|'.join([autiopath, melpath])}'"
@@ -292,7 +291,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
             from glow import WaveGlow, WaveGlowLoss
     
     criterion = WaveGlowLoss(sigma, loss_empthasis)
-    model = WaveGlow(**waveglow_config).cuda()
+    model = WaveGlow(**waveglow_config).to(xm.xla_device())
     #=====START: ADDED FOR DISTRIBUTED======
     if num_gpus > 1:
         model = apply_gradient_allreduce(model)

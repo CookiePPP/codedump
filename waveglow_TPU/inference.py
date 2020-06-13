@@ -36,18 +36,18 @@ def main(mel_files, waveglow_path, sigma, output_dir, sampling_rate, is_fp16,
     mel_files = files_to_list(mel_files)
     waveglow = torch.load(waveglow_path)['model']
     waveglow = waveglow.remove_weightnorm(waveglow)
-    waveglow.cuda().eval()
+    waveglow.to(xm.xla_device()).eval()
     if is_fp16:
         from apex import amp
         waveglow, _ = amp.initialize(waveglow, [], opt_level="O3")
 
     if denoiser_strength > 0:
-        denoiser = Denoiser(waveglow).cuda()
+        denoiser = Denoiser(waveglow).to(xm.xla_device())
 
     for i, file_path in enumerate(mel_files):
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         mel = torch.load(file_path)
-        mel = torch.autograd.Variable(mel.cuda())
+        mel = torch.autograd.Variable(mel.to(xm.xla_device()))
         mel = torch.unsqueeze(mel, 0)
         mel = mel.half() if is_fp16 else mel
         with torch.no_grad():
