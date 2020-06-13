@@ -116,9 +116,11 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, fp16_run, warm
 def save_checkpoint(model, optimizer, learning_rate, iteration, amp, scheduler, speaker_lookup, filepath):
     tqdm.write("Saving model and optimizer state at iteration {} to {}".format(
           iteration, filepath))
-    model_for_saving = WaveGlow(**waveglow_config).cuda()
-    model_for_saving.load_state_dict(model.state_dict())
-    saving_dict = {'model': model_for_saving.state_dict(),
+    #model_for_saving = WaveGlow(**waveglow_config).cuda()
+    #model_for_saving.load_state_dict(model.state_dict())
+    #state_dict = model_for_saving.state_dict()
+    state_dict = model.state_dict()
+    saving_dict = {'model': state_dict,
         'iteration': iteration,
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler.state_dict(),
@@ -140,10 +142,10 @@ def save_weights(model, optimizer, learning_rate, iteration, filepath):
                 'iteration': iteration}, filepath)
     print("Weights Saved")
 
-def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, speaker_lookup, sigma, output_directory, data_config, save_audio=True, max_length_s= 5 ):
+def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, speaker_lookup, sigma, output_directory, data_config, save_audio=True, max_length_s= 3 ):
     from mel2samp import load_wav_to_torch
     from scipy import signal
-    val_sigma = sigma * 0.9
+    val_sigma = sigma * 0.95
     model.eval()
     with torch.no_grad():
         with open(validation_files, encoding='utf-8') as f:
@@ -155,9 +157,10 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             model_type = "float"
         
         timestr = time.strftime("%Y_%m_%d-%H_%M_%S")
-        total_MAE = total_MSE = total = 0
+        total_MAE = total_MSE = total = files_processed = 0
         for i, (audiopath, melpath, *remaining) in enumerate(audiopaths_and_melpaths):
-            if i > 60: break # debug
+            if files_processed >= 7: # number of validation files to run.
+                break
             audio = load_wav_to_torch(audiopath)[0]/32768.0 # load audio from wav file to tensor
             if audio.shape[0] > (data_config['sampling_rate']*max_length_s): continue # ignore audio over max_length_seconds
             
@@ -178,8 +181,7 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             if model_type == "half":
                 mel = mel.half() # for fp16 training
             
-            audio_waveglow = model.infer(mel, speaker_id, sigma=val_sigma)
-            audio_waveglow = audio_waveglow.cpu().float()
+            audio_waveglow = model.infer(mel, speaker_id, sigma=val_sigma).cpu().float()
             
             if data_config['preempthasis']: # inverse-preempthasis
                 audio_waveglow = audio_waveglow.squeeze()
@@ -213,10 +215,15 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
                 if not os.path.exists(audio_path):
                     os.makedirs(os.path.join(output_directory, "samples", "Ground Truth"), exist_ok=True)
                     sf.write(audio_path, audio.squeeze().cpu().numpy(), data_config['sampling_rate'], "PCM_16") # save ground truth
+            files_processed+=1
     
     for convinv in model.convinv:
         if hasattr(convinv, 'W_inverse'):
             delattr(convinv, "W_inverse") # clear Inverse Weights.
+    
+    del mel, speaker_id # del GPU based tensors.
+    
+    torch.cuda.empty_cache() # clear cache for next training
     
     if total:
         average_MSE = total_MSE/total
@@ -228,7 +235,6 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
         average_MSE = 1e3
         average_MAE = 1e3
         print("Average MSE: N/A", "Average MAE: N/A")
-    
     model.train()
     return average_MSE, average_MAE
 
@@ -305,14 +311,14 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                  n_mel_channels=160,
                                  mel_fmin=data_config['mel_fmin'], mel_fmax=data_config['mel_fmax'])
     
-    optimizer = "LAMB"
+    optimizer = "Adam"
     optimizer_fused = True # use Apex fused optimizer, should be identical to normal but slightly faster
     if optimizer_fused:
         from apex import optimizers as apexopt
         if optimizer == "Adam":
             optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate)
         elif optimizer == "LAMB":
-            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1000)
+            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1e6)
     else:
         if optimizer == "Adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -326,7 +332,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     if fp16_run:
         global amp
         from apex import amp
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1', min_loss_scale=1.0)
+        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
     else:
         amp = None
     
@@ -416,7 +422,8 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
             # ================ MAIN TRAINING LOOP! ===================
             for epoch in epochs_iterator:
                 print(f"Epoch: {epoch}")
-                if num_gpus > 1: train_sampler.set_epoch(epoch)
+                if num_gpus > 1:
+                    train_sampler.set_epoch(epoch)
                 
                 if rank == 0:
                     iters_iterator = tqdm(enumerate(train_loader), desc=" Iter", smoothing=0, total=len(train_loader), position=0, unit="iter", leave=True)
@@ -468,7 +475,6 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                         if override_scheduler_best:
                             scheduler.best = override_scheduler_best
                             print("Scheduler best metric overriden. scheduler.best =", override_scheduler_best)
-                    
                     model.zero_grad()
                     mel, audio, speaker_ids = batch
                     mel = torch.autograd.Variable(mel.cuda(non_blocking=True))
@@ -485,16 +491,17 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                     else:
                         reduced_loss = loss.item()
                     
-                    if iteration > 1e3 and ((reduced_loss > LossExplosionThreshold) or (math.isnan(reduced_loss))):
-                        raise LossExplosion(f"\n\n\nLOSS EXPLOSION EXCEPTION: Loss reached {reduced_loss} during iteration {iteration}.\n\n\n")
-                    
                     if fp16_run:
                         with amp.scale_loss(loss, optimizer) as scaled_loss:
                             scaled_loss.backward()
                     else:
                         loss.backward()
                     
-                    grad_clip = False; grad_clip_thresh = 10000
+                    if iteration > 1e3 and ((reduced_loss > LossExplosionThreshold) or (math.isnan(reduced_loss))):
+                        model.zero_grad()
+                        raise LossExplosion(f"\nLOSS EXPLOSION EXCEPTION ON RANK {rank}: Loss reached {reduced_loss} during iteration {iteration}.\n\n\n")
+                    
+                    grad_clip = True; grad_clip_thresh = 500
                     if grad_clip:
                         if fp16_run:
                             grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -581,9 +588,13 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
         
         except LossExplosion as ex: # print Exception and continue from checkpoint. (turns out it takes < 4 seconds to restart like this, fucking awesome)
             print(ex) # print Loss
-            if checkpoint_path == '':
-                checkpoint_path = os.path.join(output_directory, "best_val_model")
-            assert 'best_val_model' in checkpoint_path, "Automatic restarts require checkpoint set to best_val_model"
+            checkpoint_path = os.path.join(output_directory, "best_val_model")
+            assert os.path.exists(checkpoint_path), "best_val_model must exist for automatic restarts"
+            
+            # clearing VRAM for load checkpoint
+            audio = mel = speaker_ids = loss = None
+            torch.cuda.empty_cache()
+            
             model.eval()
             model, optimizer, iteration, scheduler = load_checkpoint(checkpoint_path, model, optimizer, scheduler, fp16_run)
             learning_rate = optimizer.param_groups[0]['lr']

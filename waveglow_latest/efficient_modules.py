@@ -321,7 +321,7 @@ class InvertibleConv1x1(nn.Conv1d):
             return audio_out, log_det_W
         else:
             *_, n_of_groups = z.shape
-            log_det_W = n_of_groups * self.weight.squeeze().slogdet()[1]  # should fix nan logdet
+            log_det_W = n_of_groups * self.weight.squeeze().float().slogdet()[1] # should fix nan logdet
             audio_out = super().forward(z)
             return audio_out, log_det_W
     
@@ -414,3 +414,47 @@ class InvConv1x1Func(Function):
             dinvw -= weight_T * log_det_W_grad * n_of_groups
         
         return dx, dinvw.unsqueeze(-1)
+
+
+def permute_channels(x, reverse=False, bipart=False, shift=False, inverse_shift=False):
+    x = [x[:,i,:] for i in range(x.shape[1])]
+    if bipart and reverse:
+        half = len(x)//2
+        x = x[:half][::-1] + x[half:][::-1] # reverse H halfs [0,1,2,3,4,5,6,7] -> [3,2,1,0] + [7,6,5,4] -> [3,2,1,0,7,6,5,4]
+    elif reverse:
+        x = x[::-1] # reverse entire H [0,1,2,3,4,5,6,7] -> [7,6,5,4,3,2,1,0]
+    if shift:
+        x = [x[-1],] + x[:-1] # shift last H into first position [0,1,2,3,4,5,6,7] -> [7,0,1,2,3,4,5,6]
+    elif inverse_shift:
+        x = x[1:] + [x[0],]   # shift first H into last position [0,1,2,3,4,5,6,7] -> [1,2,3,4,5,6,7,0]
+    return torch.stack(x, dim=1)
+
+
+class PermuteHeight():
+    """
+    The layer outputs the permuted channel dim, and a placeholder log determinant.
+    inverse() performs the permutation in reverse.
+    """
+    def __init__(self, n_remaining_channels, k, n_flows, sigma):
+        assert n_flows%2==0, "PermuteHeight requires even n_flows"
+        self.sigma = sigma
+        self.const = 0.5 * np.log(2 * np.pi) + np.log(self.sigma)
+        
+        # b) we reverse Z(7), Z(6), Z(5), Z(4) over the height dimension as before, but bipartition Z(3), Z(2), Z(1), Z(0) in the middle of the height dimension then reverse each part respectively.
+        if k%4 in (2,3): # Flows (2,3, 6,7, 10,11)
+            self.bipart_reverse = True
+            self.reverse = True
+        else:                  # Flows (0,1, 4,5, 8,9)
+            self.bipart_reverse = False
+            self.reverse = True
+    
+    def __call__(self, z):
+        n_of_groups = z.shape[-1]
+        audio_out = permute_channels(z, self.reverse, self.bipart_reverse)
+        log_det_W = torch.tensor(n_of_groups*self.const, device=audio_out.device)
+        return audio_out, log_det_W
+    
+    def inverse(self, audio_out):
+        z = permute_channels(audio_out, self.reverse, self.bipart_reverse)
+        log_det_W = None
+        return z, log_det_W

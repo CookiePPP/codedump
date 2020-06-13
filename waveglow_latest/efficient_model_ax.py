@@ -4,13 +4,16 @@ import torch.nn.functional as F
 from efficient_util import add_weight_norms
 import numpy as np
 
-from efficient_modules import AffineCouplingBlock, InvertibleConv1x1
+from efficient_modules import AffineCouplingBlock
 
 class WaveGlow(nn.Module):
     def __init__(self, yoyo, yoyo_WN, n_mel_channels, n_flows, n_group, n_early_every,
-                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None):
+                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None, channel_mixing='1x1conv'):
         super(WaveGlow, self).__init__()
         assert(n_group % 2 == 0)
+        assert(hop_length % n_group == 0), "hop_length is not int divisible by n_group"
+        assert(any(channel_mixing.lower() in x for x in ("1x1convinvertibleconv1x1invconv", "waveflowpermuteheightpermutechannelpermute"))), "channel_mixing option is invalid. Options are '1x1conv' or 'permuteheight'"
+        self.channel_mixing = '1x1conv' if channel_mixing.lower() in "1x1convinvertibleconv1x1invconv" else ('permuteheight' if channel_mixing.lower() in "waveflowpermuteheightpermutechannelpermute" else None)
         self.n_flows = n_flows
         self.n_group = n_group
         self.n_early_every = n_early_every
@@ -70,16 +73,24 @@ class WaveGlow(nn.Module):
         else:
             WN_cond_channels = self.n_mel_channels+self.speaker_embed_dim
         
+        # import WN
         if yoyo_WN:
             raise NotImplementedError
             from efficient_modules import WN
         else:
             from glow_ax import WN
         
+        # import channel mixing
+        if self.channel_mixing == '1x1conv':
+            from efficient_modules import InvertibleConv1x1
+            self.convinv = nn.ModuleList()
+        elif self.channel_mixing == 'permuteheight':
+            from efficient_modules import PermuteHeight
+            self.convinv = list()
+        
         self.upsample_factor = hop_length // n_group
         sub_win_size = win_length // n_group
         
-        self.convinv = nn.ModuleList()
         self.WN = nn.ModuleList()
         
         # Set up layers with the right sizes based on how many dimensions
@@ -93,12 +104,23 @@ class WaveGlow(nn.Module):
             
             assert n_remaining_channels > 0, "n_remaining_channels is 0. (increase n_group or decrease n_early_every/n_early_size)"
             
-            self.convinv.append( InvertibleConv1x1(n_remaining_channels, memory_efficient=memory_efficient) )
+            if (k+1)/n_flows <= memory_efficient:
+                mem_eff_layer = True
+                print(f"Flow {k} using Mem Efficient Backprop")
+            else:
+                mem_eff_layer = False
+                print(f"Flow {k} using Normal Backprop")
+            
+            if self.channel_mixing == '1x1conv':
+                self.convinv.append( InvertibleConv1x1(n_remaining_channels, memory_efficient=mem_eff_layer) )
+            elif self.channel_mixing == 'permuteheight':
+                self.convinv.append( PermuteHeight(n_remaining_channels, k, n_flows, sigma=1.0) ) # sigma is hardcoded here.
+            
             if yoyo_WN:
-                self.WN.append( AffineCouplingBlock(WN, memory_efficient=memory_efficient, in_channels=n_remaining_channels//2,
+                self.WN.append( AffineCouplingBlock(WN, memory_efficient=mem_eff_layer, in_channels=n_remaining_channels//2,
                                     cond_in_channels=WN_cond_channels, **WN_config) )
             else: # I promise these two used to be different
-                self.WN.append( AffineCouplingBlock(WN, memory_efficient=memory_efficient, n_in_channels=n_remaining_channels//2,
+                self.WN.append( AffineCouplingBlock(WN, memory_efficient=mem_eff_layer, n_in_channels=n_remaining_channels//2,
                                     cond_in_channels=WN_cond_channels, **WN_config) )
         self.z_split_sizes.append(n_remaining_channels)
     
@@ -152,9 +174,9 @@ class WaveGlow(nn.Module):
             
             audio, log_s = affine_coup(audio, cond, speaker_ids=speaker_ids)
             if k:
-                logdet += log_det_W + log_s.sum((1, 2))
+                logdet += log_det_W + log_s.float().sum((1, 2))
             else:
-                logdet = log_det_W + log_s.sum((1, 2))
+                logdet = log_det_W + log_s.float().sum((1, 2))
         
         assert split_sections[1] == self.z_split_sizes[-1]
         output_audio.append(audio)
@@ -226,7 +248,7 @@ class WaveGlow(nn.Module):
             spect = F.pad(spect, (0, artifact_trimming), value=-11.512925)
         
         batch_dim, n_mel_channels, steps = spect.shape # [B, n_mel, T//hop_length]
-        samples = steps * self.hop_length # T = T//hop_length * hop_length
+        samples = (steps - 1) * self.hop_length # T = T//hop_length * hop_length
         
         z = spect.new_empty((batch_dim, samples)) # [B, T]
         if sigma > 0:

@@ -73,7 +73,7 @@ class Mel2Samp(torch.utils.data.Dataset):
         
         if check_files:
             print("Files before checking: ", len(self.audio_files))
-            if True: # list comp non-verbose
+            if True: # list comp non-verbose # this path is significantly faster
                 # filter audio files that don't exist
                 self.audio_files = [x for x in self.audio_files if os.path.exists(x[0])]
                 assert len(self.audio_files), "self.audio_files is empty"
@@ -84,7 +84,7 @@ class Mel2Samp(torch.utils.data.Dataset):
                     assert len(self.audio_files), "self.audio_files is empty"
                 
                 # filter audio files that are too short
-                self.audio_files = [x for x in self.audio_files if (os.stat(x[0]).st_size//2) >= segment_length]
+                self.audio_files = [x for x in self.audio_files if (os.stat(x[0]).st_size//2) >= segment_length+600]
                 assert len(self.audio_files), "self.audio_files is empty"
             else: # forloop with verbose support
                 i = 0
@@ -119,9 +119,9 @@ class Mel2Samp(torch.utils.data.Dataset):
         self.load_mel_from_disk = load_mel_from_disk
         self.speaker_ids = self.create_speaker_lookup_table(self.audio_files)
         
-        # Apply weighting to MLP Datasets
+        # (optional) Apply weighting to MLP Datasets
         duplicated_audiopaths = [x for x in self.audio_files if "SlicedDialogue" in x[0]]
-        for i in range(3):
+        for i in range(0):
             self.audio_files.extend(duplicated_audiopaths)
         
         random.seed(1234)
@@ -161,7 +161,7 @@ class Mel2Samp(torch.utils.data.Dataset):
         mel_segment_length = int(segment_length/hop_length)+1 # 8400/600 + 1 = 15
         if audio.size(0) >= segment_length:
             max_mel_start = int((audio.size(0)-segment_length)/hop_length) - 1 # mel.size(1) - mel_segment_length
-            mel_start = random.randint(0, max_mel_start)
+            mel_start = random.randint(0, max_mel_start) if max_mel_start > 0 else 0
             audio_start = mel_start*hop_length
             audio = audio[audio_start:audio_start + segment_length]
             mel = mel[:,mel_start:mel_start + mel_segment_length]
@@ -189,7 +189,8 @@ class Mel2Samp(torch.utils.data.Dataset):
             mel = np.load(filename[1])
             
             # offset the audio if the GTA spectrogram uses an offset
-            if ".mel.npy" in filename[1] or (".mel" in filename[1] and ".npy" in filename[1] and filename[1].split(".mel")[1].split(".npy")[0]):
+            #if ".mel.npy" in filename[1] or (".mel" in filename[1] and ".npy" in filename[1] and filename[1].split(".mel")[1].split(".npy")[0]):
+            if ".mel" in filename[1] and ".npy" in filename[1] and filename[1].split(".mel")[1].split(".npy")[0]:
                 offset = int(filename[1].split(".mel")[1].split(".npy")[0])
                 audio = audio[offset:]
                 #print(f"DEBUG: audio offset success.\nPath = '{filename[1]}'\nOffset = {offset}")
