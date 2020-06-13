@@ -41,6 +41,14 @@ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
     return acts
 
 
+def add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
+    in_act = input_a+input_b
+    t_act = torch.tanh(in_act[:, :n_channels, :])
+    s_act = torch.sigmoid(in_act[:, n_channels:, :])
+    acts = t_act * s_act
+    return acts
+
+
 class WaveGlowLoss(nn.Module):
     def __init__(self, sigma=1.0):
         super(WaveGlowLoss, self).__init__()
@@ -228,7 +236,6 @@ class WN(nn.Module):
         audio = self.start(audio) # [B, 1, n_group//2, T//n_group] -> [B, n_channels, n_group//2, T//n_group]
         if not self.merge_res_skip:
             output = torch.zeros_like(audio) # output and audio are seperate Tensors
-        n_channels_tensor = torch.IntTensor([self.n_channels])
         
         if self.speaker_embed_dim and speaker_id != None: # add speaker embeddings to spectrogram (channel dim)
             speaker_embeddings = self.speaker_embed(speaker_id)
@@ -254,10 +261,10 @@ class WN(nn.Module):
             ##print("spec.shape =", spec.shape)
             acts = self.in_layers[i](audio)
             ##print("acts.shape =", acts.shape)
-            acts = fused_add_tanh_sigmoid_multiply(
+            acts = add_tanh_sigmoid_multiply(
                 acts, # [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, n_group//2, T//n_group]
                 spec,
-                n_channels_tensor)
+                self.n_channels)
             # [B, 2*n_channels, n_group//2, T//n_group] -> [B, n_channels, n_group//2, T//n_group]
             
             if hasattr(self, 'alpha_i'): # if rezero

@@ -173,7 +173,7 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
                 assert len(remaining), f"Speaker ID missing while multispeaker == True.\nLine: {i}\n'{'|'.join([autiopath, melpath])}'"
                 speaker_id = remaining[0]
                 speaker_id = torch.IntTensor([speaker_lookup[int(speaker_id)]])
-                speaker_id = speaker_id.cuda(non_blocking=True).long()
+                speaker_id = speaker_id.to(xm.xla_device()).long()
             else:
                 speaker_id = None
             
@@ -221,8 +221,6 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             delattr(convinv, "W_inverse") # clear Inverse Weights.
     
     del mel, speaker_id # del GPU based tensors.
-    
-    torch.cuda.empty_cache() # clear cache for next training
     
     if total:
         average_MSE = total_MSE/total
@@ -310,23 +308,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                  n_mel_channels=160,
                                  mel_fmin=data_config['mel_fmin'], mel_fmax=data_config['mel_fmax'])
     
-    optimizer = "Adam"
-    optimizer_fused = True # use Apex fused optimizer, should be identical to normal but slightly faster
-    if optimizer_fused:
-        from apex import optimizers as apexopt
-        if optimizer == "Adam":
-            optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate)
-        elif optimizer == "LAMB":
-            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1e6)
-    else:
-        if optimizer == "Adam":
-            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        elif optimizer == "LAMB":
-            from lamb import Lamb as optLAMB
-            optimizer = optLAMB(model.parameters(), lr=learning_rate)
-            #import torch_optimizer as optim
-            #optimizer = optim.Lamb(model.parameters(), lr=learning_rate)
-            #raise# PyTorch doesn't currently include LAMB optimizer.
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     
     if fp16_run:
         global amp
@@ -476,10 +458,10 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                             print("Scheduler best metric overriden. scheduler.best =", override_scheduler_best)
                     model.zero_grad()
                     mel, audio, speaker_ids = batch
-                    mel = torch.autograd.Variable(mel.cuda(non_blocking=True))
-                    audio = torch.autograd.Variable(audio.cuda(non_blocking=True))
+                    mel = torch.autograd.Variable(mel.to(xm.xla_device()))
+                    audio = torch.autograd.Variable(audio.to(xm.xla_device()))
                     if waveglow_config['WN_config']['speaker_embed_dim'] > 0:
-                        speaker_ids = speaker_ids.cuda(non_blocking=True).long().squeeze(1)
+                        speaker_ids = speaker_ids.to(xm.xla_device()).long().squeeze(1)
                         outputs = model(mel, audio, speaker_ids)
                     else:
                         outputs = model(mel, audio, None)
@@ -511,7 +493,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                         is_overflow = math.isinf(grad_norm) or math.isnan(grad_norm)
                     else: is_overflow = False; grad_norm=0.00001
                     
-                    optimizer.step()
+                    xm.optimizer_step(optimizer, barrier=True)
                     if not is_overflow and with_tensorboard and rank == 0:
                         if (iteration % 100000 == 0):
                             # plot distribution of parameters
