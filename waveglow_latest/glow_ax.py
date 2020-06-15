@@ -114,13 +114,14 @@ class WN(nn.Module):
     size reset.  The dilation only doubles on each layer
     """
     def __init__(self, n_in_channels, cond_in_channels, cond_layers, cond_hidden_channels, cond_kernel_size, cond_padding_mode, seperable_conv, merge_res_skip, upsample_mode, n_layers, n_channels, # audio_channels, mel_channels*n_group, n_layers, n_conv_channels
-                 kernel_size_w, kernel_size_h, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None, n_layers_dilations_w=1, n_layers_dilations_h=None): # bool: ReZero
+                 kernel_size_w, kernel_size_h, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None, n_layers_dilations_w=None, n_layers_dilations_h=1): # bool: ReZero
         super(WN, self).__init__()
         assert(kernel_size_w % 2 == 1)
         assert(kernel_size_h % 2 == 1)
         assert(n_channels % 2 == 0)
         self.n_layers = n_layers
         self.n_channels = n_channels
+        self.kernel_size_h = kernel_size_h
         self.speaker_embed_dim = speaker_embed_dim
         self.merge_res_skip = merge_res_skip
         self.upsample_mode = upsample_mode
@@ -185,19 +186,22 @@ class WN(nn.Module):
             print("WARNING: Using constant dilation factor for WN in_layer dilation width.")
         if type(n_layers_dilations_h) == int:
             n_layers_dilations_h = [n_layers_dilations_h,]*n_layers # constant dilation if using int
+        
+        self.h_dilate = n_layers_dilations_h
+        self.padding_h = []
         for i in range(n_layers):
-            dilation_h = n_layers_dilations_w[i]
-            dilation_w = 2 ** i if n_layers_dilations_h is None else n_layers_dilations_h[i]
+            dilation_h = n_layers_dilations_h[i]
+            dilation_w = 2 ** i if n_layers_dilations_w is None else n_layers_dilations_w[i]
             
-            padding_w = (kernel_size_w*dilation_w - dilation_w)//2
-            padding_h = (kernel_size_h*dilation_h-dilation_h)//2
+            padding_w = ((kernel_size_w-1)*dilation_w)//2
+            self.padding_h.append((kernel_size_h-1)*dilation_h) # causal padding https://theblog.github.io/post/convolution-in-autoregressive-neural-networks/
             if (not seperable_conv) or (kernel_size_w == 1 and kernel_size_h == 1):
                 in_layer = nn.Conv2d(n_channels, 2*n_channels, (kernel_size_h,kernel_size_w),
-                                           dilation=(dilation_h,dilation_w), padding=(padding_h,padding_w), padding_mode=cond_padding_mode)
+                                           dilation=(dilation_h,dilation_w), padding=(0,padding_w), padding_mode='zeros')
                 in_layer = nn.utils.weight_norm(in_layer, name='weight')
             else:
                 depthwise = nn.Conv2d(n_channels, n_channels, (kernel_size_h,kernel_size_w),
-                                    dilation=(dilation_h,dilation_w), padding=(padding_h,padding_w), padding_mode=cond_padding_mode, groups=n_channels)
+                                    dilation=(dilation_h,dilation_w), padding=(0,padding_w), padding_mode='zeros', groups=n_channels)
                 depthwise = nn.utils.weight_norm(depthwise, name='weight')
                 pointwise = nn.Conv2d(n_channels, 2*n_channels, (1,1),
                                     dilation=(1,1), padding=(0,0))
@@ -223,8 +227,8 @@ class WN(nn.Module):
         #cond = F.interpolate(cond, scale_factor=600/24, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None) # upsample by hop_length//n_group
         return cond
     
-    def forward(self, audio, spect, speaker_id=None):
-        audio = audio.unsqueeze(1) # [B, n_group//2, T//n_group] -> [B, 1, n_group//2, T//n_group]
+    def forward(self, audio, spect, speaker_id=None, queues=None):
+        audio = audio.unsqueeze(1) #   [B, n_group//2, T//n_group] -> [B, 1, n_group//2, T//n_group]
         audio = self.start(audio) # [B, 1, n_group//2, T//n_group] -> [B, n_channels, n_group//2, T//n_group]
         if not self.merge_res_skip:
             output = torch.zeros_like(audio) # output and audio are seperate Tensors
@@ -245,20 +249,29 @@ class WN(nn.Module):
             spect = spect.unsqueeze(2)# [B, n_channels*n_layers, T//n_group] -> [B, n_channels*n_layers, 1, T//n_group]
             assert audio.size(3) == spect.size(3), f"audio size of {audio.size(3)} != spect size of {spect.size(3)}"
         
-        for i in range(self.n_layers): # note, later layers learn lower frequency information
-                                       # receptive field = 2**(n_layers-1)*kernel_size*n_group
-                                       # If segment length < receptive field expect trouble learning lower frequencies as other layers try to compensate.
-                                       # Since my audio is high-passed at 40Hz, (theoretically) you can expect 48000/(40*2) = 600 samples receptive field minimum required to learn.
+        for i in range(self.n_layers):
             spect_offset = i*2*self.n_channels, (i+1)*2*self.n_channels
-            spec = spect[:,spect_offset[0]:spect_offset[1],:]
-            ##print("spec.shape =", spec.shape)
-            acts = self.in_layers[i](audio)
-            ##print("acts.shape =", acts.shape)
+            spec = spect[:,spect_offset[0]:spect_offset[1]] # [B, 2*n_channels*n_layers, 1, T//n_group] -> [B, 2*n_channels, 1, T//n_group]
+            
+            
+            if queues is None:# if training/validation
+                audio_cpad = F.pad(audio, (0,0,self.padding_h[i],0)) # causal height padding (left, right, top, bottom)
+            else: # if conv-queue and inference/autoregressive sampling
+                queue = queues[i]
+                
+                if queue is None: # if first sample in autoregressive sequence, pad start with zeros
+                    B, n_channels, n_group, T_group = audio.shape
+                    queue = audio.new_zeros( size=[B, n_channels, self.padding_h[i], T_group] )
+                
+                # [B, n_channels, n_group, T//n_group]
+                queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], F.pad(audio,(0,0,self.h_dilate[i]-1,0))), dim=2) # pop old queue and append audio to end of n_group dim
+            
+            acts = self.in_layers[i](audio_cpad) # [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, pad+n_group//2, T//n_group]
             acts = fused_add_tanh_sigmoid_multiply(
-                acts, # [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, n_group//2, T//n_group]
-                spec,
+                acts, # [B, 2*n_channels, n_group//2, T//n_group]
+                spec, # [B, 2*n_channels, 1, T//n_group]
                 n_channels_tensor)
-            # [B, 2*n_channels, n_group//2, T//n_group] -> [B, n_channels, n_group//2, T//n_group]
+            # acts.shape <- [B, n_channels, n_group//2, T//n_group]
             
             if hasattr(self, 'alpha_i'): # if rezero
                 res_skip_acts = self.res_skip_layers[i](acts) * self.alpha_i[i]
@@ -278,6 +291,9 @@ class WN(nn.Module):
         
         if self.merge_res_skip:
             output = audio
+        
+        if queues is not None:
+            return self.end(output).transpose(1,0), queues
         
         return self.end(output).transpose(1,0)
         # [B, n_channels, n_group//2, T//n_group] -> [B, 2, n_group//2, T//n_group] -> [2, B, n_group//2, T//n_group]

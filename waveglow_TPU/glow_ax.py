@@ -122,7 +122,7 @@ class WN(nn.Module):
     size reset.  The dilation only doubles on each layer
     """
     def __init__(self, n_in_channels, cond_in_channels, cond_layers, cond_hidden_channels, cond_kernel_size, cond_padding_mode, seperable_conv, merge_res_skip, upsample_mode, n_layers, n_channels, # audio_channels, mel_channels*n_group, n_layers, n_conv_channels
-                 kernel_size_w, kernel_size_h, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None, n_layers_dilations_w=1, n_layers_dilations_h=None): # bool: ReZero
+                 kernel_size_w, kernel_size_h, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None, n_layers_dilations_w=None, n_layers_dilations_h=1): # bool: ReZero
         super(WN, self).__init__()
         assert(kernel_size_w % 2 == 1)
         assert(kernel_size_h % 2 == 1)
@@ -193,12 +193,13 @@ class WN(nn.Module):
             print("WARNING: Using constant dilation factor for WN in_layer dilation width.")
         if type(n_layers_dilations_h) == int:
             n_layers_dilations_h = [n_layers_dilations_h,]*n_layers # constant dilation if using int
+        self.padding_h = []
         for i in range(n_layers):
             dilation_h = n_layers_dilations_w[i]
             dilation_w = 2 ** i if n_layers_dilations_h is None else n_layers_dilations_h[i]
             
             padding_w = (kernel_size_w*dilation_w - dilation_w)//2
-            padding_h = (kernel_size_h*dilation_h-dilation_h)//2
+            self.padding_h.append((kernel_size_h-1)*dilation_h,0) # causal padding https://theblog.github.io/post/convolution-in-autoregressive-neural-networks/
             if (not seperable_conv) or (kernel_size_w == 1 and kernel_size_h == 1):
                 in_layer = nn.Conv2d(n_channels, 2*n_channels, (kernel_size_h,kernel_size_w),
                                            dilation=(dilation_h,dilation_w), padding=(padding_h,padding_w), padding_mode=cond_padding_mode)
@@ -246,6 +247,7 @@ class WN(nn.Module):
             spect = layer(spect)
             if hasattr(self, 'cond_activation_func'):
                 spect = self.cond_activation_func(spect)
+            print(spect.dtype, spect.device)
         
         if audio.size(3) > spect.size(2): # if spectrogram hasn't been upsampled yet
             spect = self._upsample_mels(spect, audio.shape)# [B, n_channels*n_layers, T//hop_length] -> [B, n_channels*n_layers, T//n_group]
@@ -259,6 +261,7 @@ class WN(nn.Module):
             spect_offset = i*2*self.n_channels, (i+1)*2*self.n_channels
             spec = spect[:,spect_offset[0]:spect_offset[1],:]
             ##print("spec.shape =", spec.shape)
+            F.pad(audio, (0,0,*self.padding_h[i])) # causal height padding
             acts = self.in_layers[i](audio)
             ##print("acts.shape =", acts.shape)
             acts = add_tanh_sigmoid_multiply(

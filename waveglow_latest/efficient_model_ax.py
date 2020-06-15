@@ -4,16 +4,17 @@ import torch.nn.functional as F
 from efficient_util import add_weight_norms
 import numpy as np
 
-from efficient_modules import AffineCouplingBlock
+from efficient_modules import WaveFlowCoupling as AffineCouplingBlock
 
 class WaveGlow(nn.Module):
     def __init__(self, yoyo, yoyo_WN, n_mel_channels, n_flows, n_group, n_early_every,
-                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None, channel_mixing='1x1conv'):
+                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None, channel_mixing='1x1conv', mix_first=True):
         super(WaveGlow, self).__init__()
         assert(n_group % 2 == 0)
         assert(hop_length % n_group == 0), "hop_length is not int divisible by n_group"
         assert(any(channel_mixing.lower() in x for x in ("1x1convinvertibleconv1x1invconv", "waveflowpermuteheightpermutechannelpermute"))), "channel_mixing option is invalid. Options are '1x1conv' or 'permuteheight'"
         self.channel_mixing = '1x1conv' if channel_mixing.lower() in "1x1convinvertibleconv1x1invconv" else ('permuteheight' if channel_mixing.lower() in "waveflowpermuteheightpermutechannelpermute" else None)
+        self.mix_first = mix_first
         self.n_flows = n_flows
         self.n_group = n_group
         self.n_early_every = n_early_every
@@ -104,7 +105,7 @@ class WaveGlow(nn.Module):
             
             assert n_remaining_channels > 0, "n_remaining_channels is 0. (increase n_group or decrease n_early_every/n_early_size)"
             
-            if (k+1)/n_flows <= memory_efficient:
+            if memory_efficient and (k+1)/n_flows <= memory_efficient:
                 mem_eff_layer = True
                 print(f"Flow {k} using Mem Efficient Backprop")
             else:
@@ -170,9 +171,14 @@ class WaveGlow(nn.Module):
                 output_audio.append(early_output)
                 audio = audio.clone()
             
-            audio, log_det_W = convinv(audio)
+            if self.mix_first:
+                audio, log_det_W = convinv(audio)
             
             audio, log_s = affine_coup(audio, cond, speaker_ids=speaker_ids)
+            
+            if not self.mix_first:
+                audio, log_det_W = convinv(audio)
+            
             if k:
                 logdet += log_det_W + log_s.float().sum((1, 2))
             else:
@@ -226,8 +232,13 @@ class WaveGlow(nn.Module):
         logdet = None
         for k, invconv, affine_coup in zip(range(self.n_flows - 1, -1, -1), self.convinv[::-1], self.WN[::-1]):
             
+            if not self.mix_first:
+                z, log_det_W = invconv.inverse(z)
+            
             z, log_s = affine_coup.inverse(z, cond, speaker_ids=speaker_ids)
-            z, log_det_W = invconv.inverse(z)
+            
+            if self.mix_first:
+                z, log_det_W = invconv.inverse(z)
             
             #if k == self.n_flows - 1:
             #    logdet = log_det_W + log_s.sum((1, 2))

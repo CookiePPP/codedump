@@ -57,7 +57,7 @@ class WaveGlowLoss(torch.nn.Module):
             z = self.empth(z)
         
         #loss = self.db_loss(z, logdet) # new DB based version
-         
+        
         loss = z.pow(2).sum(1) / self.sigma2_2 - logdet # safe original
         
         loss = loss.mean()

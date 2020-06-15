@@ -188,16 +188,15 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
                 audio_waveglow = torch.from_numpy(signal.lfilter([1], [1, -float(data_config['preempthasis'])], audio_waveglow.numpy())).float() # de-preempthasis (scipy signal is faster than pytorch implementation for some reason /shrug )
             
             audio = audio.squeeze().unsqueeze(0) # crush extra dimensions and shape for STFT
-            audio_waveglow = audio_waveglow.squeeze().unsqueeze(0) # crush extra dimensions and shape for STFT
-            audio_waveglow = audio_waveglow.clamp(-1,1) # clamp any values over/under |1.0| (which should only exist very early in training)
+            audio_waveglow = torch.clamp(audio_waveglow.squeeze().unsqueeze(0), min=-1.0, max=1.0) # crush extra dimensions and shape for STFT
+            # clamp any values over/under |1.0| (which should only exist very early in training)
             
             for STFT in STFTs: # check Spectrogram Error with multiple window sizes
                 mel_GT = STFT.mel_spectrogram(audio)
-                try:
-                    mel_waveglow = STFT.mel_spectrogram(audio_waveglow)[:,:,:mel_GT.shape[-1]]
-                except AssertionError as ex:
-                    print(ex)
-                    continue
+                
+                if not (torch.min(audio_waveglow) >= -1.):
+                    print("Skipping, audio_waveglow.min() =", torch.min(audio_waveglow))
+                mel_waveglow = STFT.mel_spectrogram(audio_waveglow)[:,:,:mel_GT.shape[-1]]
                 
                 MSE = (torch.nn.MSELoss()(mel_waveglow, mel_GT)).item() # get MSE (Mean Squared Error) between Ground Truth and WaveGlow inferred spectrograms.
                 MAE = (torch.nn.L1Loss()(mel_waveglow, mel_GT)).item() # get MAE (Mean Absolute Error) between Ground Truth and WaveGlow inferred spectrograms.
@@ -311,14 +310,14 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                  n_mel_channels=160,
                                  mel_fmin=data_config['mel_fmin'], mel_fmax=data_config['mel_fmax'])
     
-    optimizer = "Adam"
+    optimizer = "LAMB"
     optimizer_fused = True # use Apex fused optimizer, should be identical to normal but slightly faster
     if optimizer_fused:
         from apex import optimizers as apexopt
         if optimizer == "Adam":
             optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate)
         elif optimizer == "LAMB":
-            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1e6)
+            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1000)
     else:
         if optimizer == "Adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -501,7 +500,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                         model.zero_grad()
                         raise LossExplosion(f"\nLOSS EXPLOSION EXCEPTION ON RANK {rank}: Loss reached {reduced_loss} during iteration {iteration}.\n\n\n")
                     
-                    grad_clip = True; grad_clip_thresh = 500
+                    grad_clip = False; grad_clip_thresh = 500
                     if grad_clip:
                         if fp16_run:
                             grad_norm = torch.nn.utils.clip_grad_norm_(

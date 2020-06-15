@@ -108,6 +108,70 @@ class WN(nn.Module):
         return self.end(cum_skip).chunk(2, 1)
 
 
+class WaveFlowCoupling(nn.Module):
+    def __init__(self,
+                 transform_type,
+                 memory_efficient=True,
+                 **kwargs):
+        super().__init__()
+        
+        self.WN = transform_type(**kwargs)
+        if memory_efficient:
+            self.efficient_forward = AffineCouplingFunc.apply
+            self.efficient_inverse = InvAffineCouplingFunc.apply
+            self.param_list = list(self.WN.parameters())
+    
+    def forward(self, z, spect, speaker_ids):
+        if hasattr(self, 'efficient_forward'):
+            print("gradient checkpointing not implemented for WaveFlowCoupling module"); raise NotImplementedError
+            audio_out, log_s = self.efficient_forward(z, spect, speaker_ids, self.WN, *self.param_list)
+            z.storage().resize_(0)
+            return audio_out, log_s
+        else:
+            shift_val = 1
+            z_shifted = F.pad(z, (0, 0, shift_val, 0))[:, :-shift_val] # [B, n_group, T//n_group] # pad top and cut off bottom sample # this along with causal padding means the height convs can't just copy the output and have to infer from it's kernel_size previous samples.
+            log_s, t = self.WN(z_shifted, spect, speaker_ids)
+            audio_out = (z * log_s.exp()) + t
+            assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
+            assert not torch.isnan(log_s).any(), "log_s has NaN elements"
+            assert not torch.isnan(t).any(), "t has NaN elements"
+            return audio_out, log_s
+    
+    def inverse(self, audio_out, spect, speaker_ids):
+        if hasattr(self, 'efficient_inverse'):
+            print("gradient checkpointing not implemented for WaveFlowCoupling module"); raise NotImplementedError
+            z, log_s = self.efficient_inverse(audio_out, spect, speaker_ids, self.WN, *self.param_list)
+            audio_out.storage().resize_(0)
+            return z, log_s
+        else:
+            z = torch.empty_like(audio_out) # z is used as output tensor
+            
+            first_sample = audio_out[:, 0:1] # [B, n_group, T//n_group] -> [B, 1, T//n_group]
+            
+            queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
+            
+            n_group = audio_out.shape[1]
+            for i in range(n_group):# [0,1,2...18,19]
+                if i == 0:
+                    audio_samp = first_sample# initial sample # [B, 1, T//n_group]
+                else:
+                    audio_samp = audio_out[:,i:i+1]# just generated sample # [B, n_group, T//n_group] -> [B, 1, T//n_group]
+                
+                _, queues = self.WN(audio_samp, spect, speaker_ids, queues=queues) # get next sample # [2, B, n_group//2, T//n_group] -> [2, B, 1, T//n_group]
+                log_s, t = _[:,:,-1:,:]
+                z[:,i] = (audio_samp - t) / log_s.exp()
+            
+            # Reference Code from https://github.com/L0SG/WaveFlow/blob/master/model.py
+            #
+            #   z_trans = z[:, :, i_h, :].unsqueeze(2)
+            #   z[:, :, i_h, :] = ((z_trans - t) * torch.exp(-log_s)).squeeze(2)
+            #   if i_h != (self.num_height - 1):
+            #       z_shift[:, :, i_h + 1] = z[:, :, i_h]
+            
+            assert not torch.isnan(z).any(), f"z has NaN elements"
+            return z, -log_s
+
+
 class AffineCouplingBlock(nn.Module):
     def __init__(self,
                  transform_type,
@@ -444,7 +508,7 @@ class PermuteHeight():
         if k%4 in (2,3): # Flows (2,3, 6,7, 10,11)
             self.bipart_reverse = True
             self.reverse = True
-        else:                  # Flows (0,1, 4,5, 8,9)
+        else:            # Flows (0,1, 4,5, 8,9)
             self.bipart_reverse = False
             self.reverse = True
     
