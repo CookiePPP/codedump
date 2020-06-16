@@ -607,7 +607,7 @@ class T2S:
                                 # factors that make up score
                                 weighted_score =  avg_prob.item() # general alignment quality
                                 diagonality_punishment = (max(diagonality.item(),1.20)-1.20) * 0.5 * diagonality_weighting  # smooth pacing
-                                max_focus_punishment = max((enc_max_focus.item()-24), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
+                                max_focus_punishment = max((enc_max_focus.item()-40), 0) * 0.005 * max_focus_weighting # getting stuck on pauses/phones
                                 min_focus_punishment = max(0.25-enc_min_focus.item(),0) * min_focus_weighting # skipping single enc outputs
                                 avg_focus_punishment = max(2.5-enc_avg_focus.item(), 0) * avg_focus_weighting # skipping most enc outputs
                                 weighted_score -= (diagonality_punishment + max_focus_punishment + min_focus_punishment + avg_focus_punishment)
