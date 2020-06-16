@@ -13,17 +13,17 @@ LossExplosionThreshold = 1e15#11.5
 custom_lr = True # use Live Custom Learning Rate instead of Scheduler.
 
 # Custom LR
-decay_start = 600000 # wait till decay_start to start decaying learning rate
-A_ = 0.00005000
+decay_start = 500000 # wait till decay_start to start decaying learning rate
+A_ = 0.00020000
 B_ = 90000
 C_ = 0.00000000
 
-warmup_start = 0
-warmup_end   = 100
-warmup_start_lr = 0.00001000
+warmup_start = 360000
+warmup_end   = 367000
+warmup_start_lr = 0.00005000
 
 best_model_margin = 1.50 # training loss margin
-validation_interval = 100#250 if iteration < 20000 else 1000
+validation_interval = 500#250 if iteration < 20000 else 1000
 
 # Scheduled LR
 patience_iterations = 10000 # number of iterations without improvement to decrease LR

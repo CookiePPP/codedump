@@ -253,17 +253,17 @@ class WN(nn.Module):
             spect_offset = i*2*self.n_channels, (i+1)*2*self.n_channels
             spec = spect[:,spect_offset[0]:spect_offset[1]] # [B, 2*n_channels*n_layers, 1, T//n_group] -> [B, 2*n_channels, 1, T//n_group]
             
-            
             if queues is None:# if training/validation
                 audio_cpad = F.pad(audio, (0,0,self.padding_h[i],0)) # causal height padding (left, right, top, bottom)
             else: # if conv-queue and inference/autoregressive sampling
-                queue = queues[i]
-                if queue is None: # if first sample in autoregressive sequence, pad start with zeros
+                if queues[i] is None: # if first sample in autoregressive sequence, pad start with zeros
                     B, n_channels, n_group, T_group = audio.shape
-                    queue = audio.new_zeros( size=[B, n_channels, self.padding_h[i], T_group] )
+                    queues[i] = audio.new_zeros( size=[B, n_channels, self.padding_h[i], T_group] )
+                
                 # [B, n_channels, n_group, T//n_group]
                 #queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], F.pad(audio,(0,0,self.h_dilate[i]-1,0))), dim=2) # pop old queue and append audio to end of n_group dim
-                queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], audio), dim=2) # pop old queue and append audio to end of n_group dim
+                queues[i] = audio_cpad = torch.cat((queues[i][:,:,-self.padding_h[i]:], audio), dim=2) # pop old samples and append new sample to end of n_group dim
+                assert audio_cpad.shape[2] == (self.padding_h[i]+self.h_dilate[i]), f"conv queue is wrong shape. Found {audio_cpad.shape[2]}, expected {(self.padding_h[i]+self.h_dilate[i])}"
             
             acts = self.in_layers[i](audio_cpad) # [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, pad+n_group//2, T//n_group]
             acts = fused_add_tanh_sigmoid_multiply(

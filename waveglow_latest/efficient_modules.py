@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as checkpoint_grads
 from torch.autograd import Function, set_grad_enabled, grad, gradcheck
 from efficient_util import add_weight_norms
 import numpy as np
@@ -114,43 +115,40 @@ class WaveFlowCoupling(nn.Module):
                  memory_efficient=True,
                  **kwargs):
         super().__init__()
+        self.memory_efficient = memory_efficient
         
         self.WN = transform_type(**kwargs)
-        if memory_efficient:
-            self.efficient_forward = AffineCouplingFunc.apply
-            self.efficient_inverse = InvAffineCouplingFunc.apply
-            self.param_list = list(self.WN.parameters())
     
     def forward(self, z, spect, speaker_ids):
-        if hasattr(self, 'efficient_forward'):
-            print("gradient checkpointing not implemented for WaveFlowCoupling module"); raise NotImplementedError
-            audio_out, log_s = self.efficient_forward(z, spect, speaker_ids, self.WN, *self.param_list)
-            z.storage().resize_(0)
-            return audio_out, log_s
-        else:
-            pad = False
-            if pad: # predict first value using padded inputs
-                shift_val = 1
-                z_shifted = F.pad(z, (0, 0, shift_val, 0))[:, :-shift_val] # [B, n_group, T//n_group] # pad top and cut off bottom sample # this along with causal padding means the height convs can't just copy the output and have to infer from it's kernel_size previous samples.
+        pad = False
+        if pad: # predict first value using padded inputs
+            shift_val = 1
+            z_shifted = F.pad(z, (0, 0, shift_val, 0))[:, :-shift_val] # [B, n_group, T//n_group] # pad top and cut off bottom sample # this along with causal padding means the height convs can't just copy the output and have to infer from it's kernel_size previous samples.
+            if self.memory_efficient:
+                log_s, t = checkpoint_grads(self.WN.__call__, z_shifted, spect, speaker_ids)
+            else:
                 log_s, t = self.WN(z_shifted, spect, speaker_ids)
-                assert not torch.isnan(log_s).any(), "log_s has NaN elements"
-                assert not torch.isnan(t).any(), "t has NaN elements"
-                audio_out = z * log_s.exp() + t # ignore changes to first sample since that conv has only padded information (which will not happen during inference)
-                assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
+            assert not torch.isnan(log_s).any(), "log_s has NaN elements"
+            assert not torch.isnan(t).any(), "t has NaN elements"
+            audio_out = z * log_s.exp() + t # ignore changes to first sample since that conv has only padded information (which will not happen during inference)
+            assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
+        
+        else: # pass first value through since conv can't do much with it
+            z_shifted = z[:, :-1] # last value not needed (as there is nothing left to infer, thus no loss to be applied if used as input)
             
-            else: # pass first value through since conv can't do much with it
-                z_shifted = z[:, :-1] # last value not needed (as there is nothing left to infer, thus no loss to be applied if used as input)
-                
+            if self.memory_efficient:
+                log_s, t = checkpoint_grads(self.WN.__call__, z_shifted, spect, speaker_ids)
+            else:
                 log_s, t = self.WN(z_shifted, spect, speaker_ids)
-                assert not torch.isnan(log_s).any(), "log_s has NaN elements"
-                assert not torch.isnan(t).any(), "t has NaN elements"
-                audio_out = torch.cat((z[:,:1], (z[:,1:] * log_s.exp()) + t), dim=1) # ignore changes to first sample since that conv has only padded information (which will not happen during inference)
-                assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
-            return audio_out, log_s
+            assert not torch.isnan(log_s).any(), "log_s has NaN elements"
+            assert not torch.isnan(t).any(), "t has NaN elements"
+            audio_out = torch.cat((z[:,:1], (z[:,1:] * log_s.exp()) + t), dim=1) # ignore changes to first sample since that conv has only padded information (which will not happen during inference)
+            assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
+        return audio_out, log_s
     
     def inverse(self, audio_out, spect, speaker_ids):
         if hasattr(self, 'efficient_inverse'):
-            print("gradient checkpointing not implemented for WaveFlowCoupling module"); raise NotImplementedError
+            print("gradient checkpointing not implemented for WaveFlowCoupling module inverse"); raise NotImplementedError
             z, log_s = self.efficient_inverse(audio_out, spect, speaker_ids, self.WN, *self.param_list)
             audio_out.storage().resize_(0)
             return z, log_s
@@ -174,7 +172,7 @@ class WaveFlowCoupling(nn.Module):
                     assert not torch.isnan(log_s).any(), f"log_s has NaN elements"
                     z[:,i+1:i+2] = (next_audio_samp - t) / log_s.exp() # save predicted next sample
                     assert not torch.isnan(z).any(), f"z has NaN elements"
-            elif False:
+            elif True:
                 n_group = audio_out.shape[1]
                 for i in range(n_group-1):# [0,1,2...22]
                     if i == 0:
@@ -185,15 +183,15 @@ class WaveFlowCoupling(nn.Module):
                     
                     acts, queues = self.WN(audio_samp, spect, speaker_ids, queues=queues) # get next sample
                     
-                    del queues
-                    queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
+                    #del queues
+                    #queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
                     
-                    log_s, t = acts # [2, B, n_group//2, T//n_group] -> [B, 1, T//n_group], [B, 1, T//n_group]
+                    log_s, t = acts[:,:,-1:] # [2, B, n_group//2, T//n_group] -> [B, 1, T//n_group], [B, 1, T//n_group]
                     assert not torch.isnan(t).any(), f"t has NaN elements"
                     assert not torch.isnan(log_s).any(), f"log_s has NaN elements"
                     z[:,i+1:i+2] = (next_audio_samp - t) / log_s.exp() # save predicted next sample
                     assert not torch.isnan(z).any(), f"z has NaN elements"
-            elif True:
+            elif True: # THIS ONE ACTUALLY WORKS... for some reason
                 n_group = audio_out.shape[1]
                 for i in range(n_group-1):# [0,1,2...22]
                     if i == 0:
@@ -202,10 +200,10 @@ class WaveFlowCoupling(nn.Module):
                     assert not torch.isnan(audio_samps).any(), f"next_audio_samp has NaN elements"
                     assert not torch.isnan(next_audio_samp).any(), f"next_audio_samp has NaN elements"
                     
-                    acts, queues = self.WN(audio_samps, spect, speaker_ids, queues=queues) # get next sample
+                    acts = self.WN(audio_samps, spect, speaker_ids) # get next sample
                     
-                    del queues
-                    queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
+                    #del queues
+                    #queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
                     
                     log_s, t = acts[:,:,-1:] # [2, B, n_group//2, T//n_group] -> [B, 1, T//n_group], [B, 1, T//n_group]
                     assert not torch.isnan(t).any(), f"t has NaN elements"
