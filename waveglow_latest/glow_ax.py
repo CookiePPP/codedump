@@ -258,13 +258,12 @@ class WN(nn.Module):
                 audio_cpad = F.pad(audio, (0,0,self.padding_h[i],0)) # causal height padding (left, right, top, bottom)
             else: # if conv-queue and inference/autoregressive sampling
                 queue = queues[i]
-                
                 if queue is None: # if first sample in autoregressive sequence, pad start with zeros
                     B, n_channels, n_group, T_group = audio.shape
                     queue = audio.new_zeros( size=[B, n_channels, self.padding_h[i], T_group] )
-                
                 # [B, n_channels, n_group, T//n_group]
-                queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], F.pad(audio,(0,0,self.h_dilate[i]-1,0))), dim=2) # pop old queue and append audio to end of n_group dim
+                #queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], F.pad(audio,(0,0,self.h_dilate[i]-1,0))), dim=2) # pop old queue and append audio to end of n_group dim
+                queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], audio), dim=2) # pop old queue and append audio to end of n_group dim
             
             acts = self.in_layers[i](audio_cpad) # [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, pad+n_group//2, T//n_group]
             acts = fused_add_tanh_sigmoid_multiply(

@@ -128,13 +128,24 @@ class WaveFlowCoupling(nn.Module):
             z.storage().resize_(0)
             return audio_out, log_s
         else:
-            shift_val = 1
-            z_shifted = F.pad(z, (0, 0, shift_val, 0))[:, :-shift_val] # [B, n_group, T//n_group] # pad top and cut off bottom sample # this along with causal padding means the height convs can't just copy the output and have to infer from it's kernel_size previous samples.
-            log_s, t = self.WN(z_shifted, spect, speaker_ids)
-            audio_out = (z * log_s.exp()) + t
-            assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
-            assert not torch.isnan(log_s).any(), "log_s has NaN elements"
-            assert not torch.isnan(t).any(), "t has NaN elements"
+            pad = False
+            if pad: # predict first value using padded inputs
+                shift_val = 1
+                z_shifted = F.pad(z, (0, 0, shift_val, 0))[:, :-shift_val] # [B, n_group, T//n_group] # pad top and cut off bottom sample # this along with causal padding means the height convs can't just copy the output and have to infer from it's kernel_size previous samples.
+                log_s, t = self.WN(z_shifted, spect, speaker_ids)
+                assert not torch.isnan(log_s).any(), "log_s has NaN elements"
+                assert not torch.isnan(t).any(), "t has NaN elements"
+                audio_out = z * log_s.exp() + t # ignore changes to first sample since that conv has only padded information (which will not happen during inference)
+                assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
+            
+            else: # pass first value through since conv can't do much with it
+                z_shifted = z[:, :-1] # last value not needed (as there is nothing left to infer, thus no loss to be applied if used as input)
+                
+                log_s, t = self.WN(z_shifted, spect, speaker_ids)
+                assert not torch.isnan(log_s).any(), "log_s has NaN elements"
+                assert not torch.isnan(t).any(), "t has NaN elements"
+                audio_out = torch.cat((z[:,:1], (z[:,1:] * log_s.exp()) + t), dim=1) # ignore changes to first sample since that conv has only padded information (which will not happen during inference)
+                assert not torch.isnan(audio_out).any(), "audio_out has NaN elements"
             return audio_out, log_s
     
     def inverse(self, audio_out, spect, speaker_ids):
@@ -144,29 +155,64 @@ class WaveFlowCoupling(nn.Module):
             audio_out.storage().resize_(0)
             return z, log_s
         else:
-            z = torch.empty_like(audio_out) # z is used as output tensor
-            
-            first_sample = audio_out[:, 0:1] # [B, n_group, T//n_group] -> [B, 1, T//n_group]
+            z = torch.empty_like(audio_out).zero_() # z is used as output tensor
             
             queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
             
-            n_group = audio_out.shape[1]
-            for i in range(n_group):# [0,1,2...18,19]
-                if i == 0:
-                    audio_samp = first_sample# initial sample # [B, 1, T//n_group]
-                else:
-                    audio_samp = audio_out[:,i:i+1]# just generated sample # [B, n_group, T//n_group] -> [B, 1, T//n_group]
-                
-                _, queues = self.WN(audio_samp, spect, speaker_ids, queues=queues) # get next sample # [2, B, n_group//2, T//n_group] -> [2, B, 1, T//n_group]
-                log_s, t = _[:,:,-1:,:]
-                z[:,i] = (audio_samp - t) / log_s.exp()
-            
-            # Reference Code from https://github.com/L0SG/WaveFlow/blob/master/model.py
-            #
-            #   z_trans = z[:, :, i_h, :].unsqueeze(2)
-            #   z[:, :, i_h, :] = ((z_trans - t) * torch.exp(-log_s)).squeeze(2)
-            #   if i_h != (self.num_height - 1):
-            #       z_shift[:, :, i_h + 1] = z[:, :, i_h]
+            if False: # current NaN values, possibly because of training
+                n_group = audio_out.shape[1]
+                for i in range(n_group-1):# [0,1,2...22]
+                    if i == 0:
+                        z[:,i:i+1] = audio_out[:,i:i+1] # initial sample # [B, 1, T//n_group]
+                    audio_samp, next_audio_samp = z[:,i:i+1], audio_out[:,i+1:i+2]# just generated sample # [B, n_group, T//n_group] -> [B, 1, T//n_group]
+                    assert not torch.isnan(audio_samp).any(), f"next_audio_samp has NaN elements"
+                    assert not torch.isnan(next_audio_samp).any(), f"next_audio_samp has NaN elements"
+                    
+                    log_s, t = self.WN(audio_samp, spect, speaker_ids) # get next sample
+                    
+                    assert not torch.isnan(t).any(), f"t has NaN elements"
+                    assert not torch.isnan(log_s).any(), f"log_s has NaN elements"
+                    z[:,i+1:i+2] = (next_audio_samp - t) / log_s.exp() # save predicted next sample
+                    assert not torch.isnan(z).any(), f"z has NaN elements"
+            elif False:
+                n_group = audio_out.shape[1]
+                for i in range(n_group-1):# [0,1,2...22]
+                    if i == 0:
+                        z[:,i:i+1] = audio_out[:,i:i+1] # initial sample # [B, 1, T//n_group]
+                    audio_samp, next_audio_samp = z[:,i:i+1], audio_out[:,i+1:i+2]# just generated sample # [B, n_group, T//n_group] -> [B, 1, T//n_group]
+                    assert not torch.isnan(audio_samp).any(), f"next_audio_samp has NaN elements"
+                    assert not torch.isnan(next_audio_samp).any(), f"next_audio_samp has NaN elements"
+                    
+                    acts, queues = self.WN(audio_samp, spect, speaker_ids, queues=queues) # get next sample
+                    
+                    del queues
+                    queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
+                    
+                    log_s, t = acts # [2, B, n_group//2, T//n_group] -> [B, 1, T//n_group], [B, 1, T//n_group]
+                    assert not torch.isnan(t).any(), f"t has NaN elements"
+                    assert not torch.isnan(log_s).any(), f"log_s has NaN elements"
+                    z[:,i+1:i+2] = (next_audio_samp - t) / log_s.exp() # save predicted next sample
+                    assert not torch.isnan(z).any(), f"z has NaN elements"
+            elif True:
+                n_group = audio_out.shape[1]
+                for i in range(n_group-1):# [0,1,2...22]
+                    if i == 0:
+                        z[:,i:i+1] = audio_out[:,i:i+1] # initial sample # [B, 1, T//n_group]
+                    audio_samps, next_audio_samp = z[:,:i+1], audio_out[:,i+1:i+2]# just generated sample # [B, n_group, T//n_group] -> [B, 1, T//n_group]
+                    assert not torch.isnan(audio_samps).any(), f"next_audio_samp has NaN elements"
+                    assert not torch.isnan(next_audio_samp).any(), f"next_audio_samp has NaN elements"
+                    
+                    acts, queues = self.WN(audio_samps, spect, speaker_ids, queues=queues) # get next sample
+                    
+                    del queues
+                    queues = [None,]*self.WN.n_layers # create blank queue to flag for conv-queue
+                    
+                    log_s, t = acts[:,:,-1:] # [2, B, n_group//2, T//n_group] -> [B, 1, T//n_group], [B, 1, T//n_group]
+                    assert not torch.isnan(t).any(), f"t has NaN elements"
+                    assert not torch.isnan(log_s).any(), f"log_s has NaN elements"
+                    z[:,i+1:i+2] = (next_audio_samp - t) / log_s.exp() # save predicted next sample
+                    assert not torch.isnan(z).any(), f"z has NaN elements"
+                    #del audio_samps, next_audio_samp, log_s, t # not tested yet
             
             assert not torch.isnan(z).any(), f"z has NaN elements"
             return z, -log_s
