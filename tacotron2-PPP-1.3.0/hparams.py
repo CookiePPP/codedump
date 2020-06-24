@@ -15,7 +15,7 @@ def create_hparams(hparams_string=None, verbose=False):
         seed=1234,
         dynamic_loss_scaling=True,
         fp16_run=False,
-        distributed_run=True,
+        distributed_run=False,
         dist_backend="nccl",
         dist_url="tcp://127.0.0.1:54321",
         cudnn_enabled=True,
@@ -32,8 +32,11 @@ def create_hparams(hparams_string=None, verbose=False):
         load_mel_from_disk=True,
         speakerlist='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/speaker_ids.txt',
         use_saved_speakers=True, # use the speaker lookups saved inside the model instead of generating again
-        training_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/mel_train_taca2_merged.txt',
-        validation_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/mel_validation_taca2_merged.txt',
+        raw_speaker_ids=False, # use the speaker IDs found in filelists for the internal IDs. Values over max_speakers will crash (as intended).
+        training_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/train_taca2_arpa.txt',
+        validation_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/validation_taca2_arpa.txt',
+        #training_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/mel_train_taca2_merged.txt',
+        #validation_files='/media/cookie/Samsung 860 QVO/ClipperDatasetV2/filelists/mel_validation_taca2_merged.txt',
         text_cleaners=['basic_cleaners'],
         
         ################################
@@ -110,11 +113,11 @@ def create_hparams(hparams_string=None, verbose=False):
         p_DecRNN_cell_dropout=0.00,       # 0.0 baseline
         
         # (Decoder) Attention parameters
-        attention_type=2,
+        attention_type=0,
         # 0 -> Hybrid Location-Based Attention (Vanilla Tacotron2)
         # 1 -> GMMAttention (Long-form Synthesis)
         # 1 -> Dynamic Convolution Attention (Long-form Synthesis)
-        attention_dim=8,      # 128 Layer baseline
+        attention_dim=128,      # 128 Layer baseline
         
         # (Decoder) Attention Type 0 (and 2) Parameters
         attention_location_n_filters=32,   # 32 baseline
@@ -131,7 +134,7 @@ def create_hparams(hparams_string=None, verbose=False):
         normalize_AttRNN_output=False,  # True baseline
         
         # (Decoder) Attention Type 2 Parameters
-        dynamic_filter_num=8, # 8 baseline
+        dynamic_filter_num=128, # 8 baseline
         dynamic_filter_len=21, # 21 baseline # currently only 21 is supported
         
         # (Postnet) Mel-post processing network parameters
@@ -174,8 +177,8 @@ def create_hparams(hparams_string=None, verbose=False):
         learning_rate=0.1e-5,
         weight_decay=1e-6,
         grad_clip_thresh=1.0,
-        batch_size=24,
-        val_batch_size=24, # for more precise comparisons between models, constant batch_size is useful
+        batch_size=64,
+        val_batch_size=64, # for more precise comparisons between models, constant batch_size is useful
         use_TBPTT=True,
         truncated_length=1000, # max mel length till truncation.
         mask_padding=True,#mask values by setting them to the same values in target and predicted

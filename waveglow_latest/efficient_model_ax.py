@@ -8,7 +8,7 @@ from efficient_modules import WaveFlowCoupling as AffineCouplingBlock
 
 class WaveGlow(nn.Module):
     def __init__(self, yoyo, yoyo_WN, n_mel_channels, n_flows, n_group, n_early_every,
-                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None, channel_mixing='1x1conv', mix_first=True):
+                n_early_size, memory_efficient, spect_scaling, upsample_mode, upsample_first, speaker_embed, cond_layers, cond_hidden_channels, cond_output_channels, cond_kernel_size, cond_residual, cond_padding_mode, WN_config, win_length, hop_length, cond_res_rezero=False, cond_activation_func='none', negative_slope=None, channel_mixing='1x1conv', mix_first=True, preceived_vol_scaling=False):
         super(WaveGlow, self).__init__()
         assert(n_group % 2 == 0)
         assert(hop_length % n_group == 0), "hop_length is not int divisible by n_group"
@@ -22,6 +22,7 @@ class WaveGlow(nn.Module):
         self.win_size = win_length
         self.hop_length = hop_length
         self.n_mel_channels = n_mel_channels
+        self.vol_scaling = preceived_vol_scaling
         self.upsample_early = upsample_first
         self.upsample_mode = WN_config['upsample_mode']
         
@@ -131,6 +132,11 @@ class WaveGlow(nn.Module):
         forward_input[0] = mel_spectrogram:  batch x n_mel_channels x frames
         forward_input[1] = audio: batch x time
         """
+        if self.vol_scaling:
+            with torch.no_grad():
+                audio[audio>0] = 2**(audio[audio>0].log10())
+                audio[audio<0] = -(2**((-audio[audio<0]).log10()))
+        
         # Add speaker conditioning
         if self.speaker_embed_dim:
             speaker_embeddings = self.speaker_embed(speaker_ids)
@@ -248,6 +254,10 @@ class WaveGlow(nn.Module):
             if k % self.n_early_every == 0 and k:
                 z = torch.cat((remained_z.pop(), z), 1)
         
+        if self.vol_scaling:
+            z[z>0] = 10**(z[z>0].log()/0.69314718056)
+            z[z<0] = -(10**((-z[z<0]).log()/0.69314718056))
+        
         z = z.transpose(1, 2).contiguous().view(batch_dim, -1)
         return z, logdet
     
@@ -269,6 +279,26 @@ class WaveGlow(nn.Module):
             audio_trim = artifact_trimming*self.hop_length # amount of audio to trim
             audio = audio[:, :-audio_trim]
         return audio
+    
+    def remove_weightnorm(self):
+        recursive_remove_weightnorm(self)
+    
+    def apply_weightnorm(self):
+        recursive_apply_weightnorm(self)
+
+
+def recursive_remove_weightnorm(model, name='weight'):
+    for module in model.children():
+        if hasattr(module, f'{name}_g') or hasattr(module, f'{name}_v'):
+            torch.nn.utils.remove_weight_norm(module, name=name) # inplace remove weight_norm
+        recursive_remove_weightnorm(module, name=name)
+
+
+def recursive_apply_weightnorm(model, name='weight'):
+    for module in model.children():
+        if hasattr(module, f'{name}') and not (hasattr(module, f'{name}_g') or hasattr(module, f'{name}_v')):
+            torch.nn.utils.weight_norm(module, name=name) # inplace remove weight_norm
+        recursive_apply_weightnorm(module, name=name)
 
 
 if __name__ == '__main__':

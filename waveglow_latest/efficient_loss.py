@@ -47,7 +47,7 @@ class WaveGlowLoss(torch.nn.Module):
         return loss/batch_size
     
     def forward(self, model_outputs):
-        z, logdet = model_outputs # [B, ...], logdet
+        z, logdet = model_outputs # [B, ...], [B]
         
         z = z.float()
         logdet = logdet.float()
@@ -55,7 +55,7 @@ class WaveGlowLoss(torch.nn.Module):
         if self.loss_empthasis:
             z = self.empth(z)
         
-        #loss = self.db_loss(z, logdet)
+        loss = self.db_loss(z, logdet)
         
         # [B, T] -> [B]
         loss = z.pow(2).sum(1) / self.sigma2_2 - logdet # safe original

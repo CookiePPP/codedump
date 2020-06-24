@@ -53,6 +53,9 @@ from tqdm import tqdm
 sys.path.insert(0, 'tacotron2')
 from tacotron2.layers import TacotronSTFT
 
+from mel2samp import load_wav_to_torch
+from scipy import signal
+
 class LossExplosion(Exception):
     """Custom Exception Class. If Loss Explosion, raise Error and automatically restart training script from previous best_val_model checkpoint."""
     pass
@@ -143,10 +146,11 @@ def save_weights(model, optimizer, learning_rate, iteration, filepath):
     print("Weights Saved")
 
 def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, speaker_lookup, sigma, output_directory, data_config, save_audio=True, max_length_s= 3 ):
-    from mel2samp import load_wav_to_torch
-    from scipy import signal
+    print("Validating... ", end="")
     val_sigma = sigma * 0.95
     model.eval()
+    val_start_time = time.time()
+    STFT_elapsed = samples_processed = 0
     with torch.no_grad():
         with open(validation_files, encoding='utf-8') as f:
             audiopaths_and_melpaths = [line.strip().split('|') for line in f]
@@ -191,6 +195,7 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
             audio_waveglow = torch.clamp(audio_waveglow.squeeze().unsqueeze(0), min=-1.0, max=1.0) # crush extra dimensions and shape for STFT
             # clamp any values over/under |1.0| (which should only exist very early in training)
             
+            STFT_start_time = time.time()
             for STFT in STFTs: # check Spectrogram Error with multiple window sizes
                 mel_GT = STFT.mel_spectrogram(audio)
                 
@@ -204,6 +209,7 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
                 total_MAE+=MAE
                 total_MSE+=MSE
                 total+=1
+            STFT_elapsed += time.time()-STFT_start_time
             
             if save_audio:
                 audio_path = os.path.join(output_directory, "samples", str(iteration)+"-"+timestr, os.path.basename(audiopath)) # Write audio to checkpoint_directory/iteration/audiofilename.wav
@@ -215,26 +221,35 @@ def validate(model, loader_STFT, STFTs, logger, iteration, validation_files, spe
                     os.makedirs(os.path.join(output_directory, "samples", "Ground Truth"), exist_ok=True)
                     sf.write(audio_path, audio.squeeze().cpu().numpy(), data_config['sampling_rate'], "PCM_16") # save ground truth
             files_processed+=1
-    
-    for convinv in model.convinv:
-        if hasattr(convinv, 'W_inverse'):
-            delattr(convinv, "W_inverse") # clear Inverse Weights.
-    
-    del mel, speaker_id # del GPU based tensors.
-    
-    torch.cuda.empty_cache() # clear cache for next training
+            samples_processed+=audio_waveglow.shape[-1]
     
     if total:
         average_MSE = total_MSE/total
         average_MAE = total_MAE/total
         logger.add_scalar('val_MSE', average_MSE, iteration)
         logger.add_scalar('val_MAE', average_MAE, iteration)
-        print("Average MSE:", average_MSE, "Average MAE:", average_MAE)
+        time_elapsed = time.time()-val_start_time
+        time_elapsed_without_stft = time_elapsed-STFT_elapsed
+        samples_per_second = samples_processed/time_elapsed_without_stft
+        print("Average MSE:", average_MSE, "Average MAE:", average_MAE,
+            "s:", round(time_elapsed_without_stft, 3),
+            "s_stft:", round(time_elapsed, 3),
+            "s/file:", round(time_elapsed_without_stft/files_processed, 3),
+            "rtf:", round(samples_per_second/data_config['sampling_rate'], 3),
+            "samples/s:", round(samples_per_second, 3)
+          )
     else:
         average_MSE = 1e3
         average_MAE = 1e3
         print("Average MSE: N/A", "Average MAE: N/A")
+    
+    for convinv in model.convinv:
+        if hasattr(convinv, 'W_inverse'):
+            delattr(convinv, "W_inverse") # clear Inverse Weights.
+    del mel, speaker_id # del GPU based tensors.
+    torch.cuda.empty_cache() # clear cache for next training
     model.train()
+    
     return average_MSE, average_MAE
 
 def multiLR(model):
@@ -268,7 +283,7 @@ def multiLR(model):
     
 def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
           sigma, loss_empthasis, iters_per_checkpoint, batch_size, seed, fp16_run,
-          checkpoint_path, with_tensorboard, logdirname, datedlogdir, warm_start=False):
+          checkpoint_path, with_tensorboard, logdirname, datedlogdir, warm_start=False, optimizer='ADAM'):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     #=====START: ADDED FOR DISTRIBUTED======
@@ -310,18 +325,19 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                  n_mel_channels=160,
                                  mel_fmin=data_config['mel_fmin'], mel_fmax=data_config['mel_fmax'])
     
-    optimizer = "Adam"
+    #optimizer = "Adam"
+    optimizer = optimizer.lower()
     optimizer_fused = True # use Apex fused optimizer, should be identical to normal but slightly faster
     if optimizer_fused:
         from apex import optimizers as apexopt
-        if optimizer == "Adam":
+        if optimizer == "adam":
             optimizer = apexopt.FusedAdam(model.parameters(), lr=learning_rate)
-        elif optimizer == "LAMB":
-            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=1000)
+        elif optimizer == "lamb":
+            optimizer = apexopt.FusedLAMB(model.parameters(), lr=learning_rate, max_grad_norm=2000)
     else:
-        if optimizer == "Adam":
+        if optimizer == "adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        elif optimizer == "LAMB":
+        elif optimizer == "lamb":
             from lamb import Lamb as optLAMB
             optimizer = optLAMB(model.parameters(), lr=learning_rate)
             #import torch_optimizer as optim
@@ -389,7 +405,8 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     moving_average = int(min(len(train_loader), 100)) # average loss over entire Epoch
     rolling_sum = StreamingMovingAverage(moving_average)
     start_time = time.time()
-    start_time_single_batch = time.time()
+    start_time_iter = time.time()
+    start_time_dekaiter = time.time()
     model.train()
     
     # best (averaged) training loss
@@ -436,7 +453,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                                 internal_text = str(f.read())
                                 if len(internal_text) > 0:
                                     #code = compile(internal_text, "run_every_epoch.py", 'exec')
-                                    ldict = {'iteration': iteration}
+                                    ldict = {'iteration': iteration, 'seconds_elapsed': time.time()-start_time}
                                     exec(internal_text, globals(), ldict)
                                 else:
                                     print("No Custom code found, continuing without changes.")
@@ -512,28 +529,27 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                     else: is_overflow = False; grad_norm=0.00001
                     
                     optimizer.step()
-                    if not is_overflow and with_tensorboard and rank == 0:
-                        if (iteration % 100000 == 0):
-                            # plot distribution of parameters
-                            for tag, value in model.named_parameters():
-                                tag = tag.replace('.', '/')
-                                logger.add_histogram(tag, value.data.cpu().numpy(), iteration)
-                        logger.add_scalar('training_loss', reduced_loss, iteration)
-                        #logger.add_scalar('training_loss_exp', 500*(exp(reduced_loss)), iteration)
-                        logger.add_scalar('training_loss_samples', reduced_loss, iteration*batch_size)
-                        if (iteration % 20 == 0):
-                            logger.add_scalar('learning.rate', learning_rate, iteration)
+                    if not is_overflow and rank == 0:
+                        if with_tensorboard:
+                            if (iteration % 100000 == 0):
+                                # plot distribution of parameters
+                                for tag, value in model.named_parameters():
+                                    tag = tag.replace('.', '/')
+                                    logger.add_histogram(tag, value.data.cpu().numpy(), iteration)
+                            logger.add_scalar('training_loss', reduced_loss, iteration)
+                            logger.add_scalar('training_loss_samples', reduced_loss, iteration*batch_size)
+                            if (iteration % 20 == 0):
+                                logger.add_scalar('learning.rate', learning_rate, iteration)
+                            if (iteration % 10 == 0):
+                                logger.add_scalar('duration', ((time.time() - start_time_dekaiter)/10), iteration)
+                        
+                        average_loss = rolling_sum.process(reduced_loss)
                         if (iteration % 10 == 0):
-                            logger.add_scalar('duration', ((time.time() - start_time)/10), iteration)
-                        start_time_single_batch = time.time()
-                    
-                    average_loss = rolling_sum.process(reduced_loss)
-                    if rank == 0:
-                        if (iteration % 10 == 0):
-                            tqdm.write("{} {}:  {:.3f}  {:.3f} {:08.3F} {:.8f}LR ({:.8f} Effective)  {:.2f}s/iter {:.4f}s/item".format(time.strftime("%H:%M:%S"), iteration, reduced_loss, average_loss, round(grad_norm,3), learning_rate, min((grad_clip_thresh/grad_norm)*learning_rate,learning_rate), (time.time() - start_time)/10, ((time.time() - start_time)/10)/(batch_size*num_gpus)))
-                            start_time = time.time()
+                            tqdm.write("{} {}:  {:.3f}  {:.3f} {:08.3F} {:.8f}LR ({:.8f} Effective)  {:.2f}s/iter {:.4f}s/item".format(time.strftime("%H:%M:%S"), iteration, reduced_loss, average_loss, round(grad_norm,3), learning_rate, min((grad_clip_thresh/grad_norm)*learning_rate,learning_rate), (time.time() - start_time_dekaiter)/10, ((time.time() - start_time_dekaiter)/10)/(batch_size*num_gpus)))
+                            start_time_dekaiter = time.time()
                         else:
                             tqdm.write("{} {}:  {:.3f}  {:.3f} {:08.3F} {:.8f}LR ({:.8f} Effective)".format(time.strftime("%H:%M:%S"), iteration, reduced_loss, average_loss, round(grad_norm,3), learning_rate, min((grad_clip_thresh/grad_norm)*learning_rate,learning_rate)))
+                        start_time_iter = time.time()
                     
                     if rank == 0 and (len(rolling_sum.values) > moving_average-2):
                         if (average_loss+best_model_margin) < best_model_loss:
@@ -552,7 +568,6 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                         checkpoint_path = f"{output_directory}/waveglow_{iteration}"
                         save_checkpoint(model, optimizer, learning_rate, iteration, amp, scheduler, speaker_lookup,
                                         checkpoint_path)
-                        start_time_single_batch = time.time()
                         if (os.path.exists(save_file_check_path)):
                             os.remove(save_file_check_path)
                     

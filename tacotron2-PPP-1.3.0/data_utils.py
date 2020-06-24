@@ -29,7 +29,10 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.audio_offset = audio_offset
         self.shuffle = shuffle
         if speaker_ids is None:
-            self.speaker_ids = self.create_speaker_lookup_table(self.audiopaths_and_text)
+            if hasattr(hparams, 'raw_speaker_ids') and hparams.raw_speaker_ids:
+                self.speaker_ids = {k:k for k in range(hparams.n_speakers)} # map IDs in files directly to internal IDs
+            else:
+                self.speaker_ids = self.create_speaker_lookup_table(self.audiopaths_and_text)
         
         self.load_torchmoji = hparams.torchMoji_training and hparams.torchMoji_linear
         
@@ -49,10 +52,11 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.filter_length = hparams.filter_length
         self.hop_length = hparams.hop_length
         
-        # Apply weighting to MLP Datasets
-        duplicated_audiopaths = [x for x in self.audiopaths_and_text if "SlicedDialogue" in x[0]]
-        for i in range(3):
-            self.audiopaths_and_text.extend(duplicated_audiopaths)
+        if False:
+            # Apply weighting to MLP Datasets
+            duplicated_audiopaths = [x for x in self.audiopaths_and_text if "SlicedDialogue" in x[0]]
+            for i in range(3):
+                self.audiopaths_and_text.extend(duplicated_audiopaths)
         
         # SHUFFLE audiopaths
         random.seed(hparams.seed)
@@ -66,7 +70,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.truncated_length = hparams.truncated_length # frames
         
         # -------------- PREDICT LENGTH (TBPTT) --------------
-        if hparams.use_TBPTT:
+        if hparams.use_TBPTT and TBPTT:
             self.audio_lengths = torch.tensor([self.get_mel(x[0]).shape[1] for x in self.audiopaths_and_text]) # get the length of every file (the long way)
         else:
             self.audio_lengths = torch.tensor([self.truncated_length-1 for x in self.audiopaths_and_text]) # use dummy lengths

@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"
         integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
     <title>The Text to Speech App</title>
-    <link rel="shortcut icon" href="favicon.ico">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <style>
     .collapsible {
       background-color: #777;
@@ -49,8 +49,6 @@
 </head>
 
 <body>
-
-
     <div class="w-50 p-3 ml-3" style="margin: auto auto!important;">
         <a href="/">Home/Reset</a>
         <div style="float: right;">Send Feedback to <a href="mailto:cookietriplep@gmail.com" title="You can send whatever to this email, I reply to about 50% of what comes in.">cookietriplep@gmail.com</a></div>
@@ -62,16 +60,16 @@
             <form id="input_form" name="input_form" method="POST" action="/tts">
                 <div class="form-group">
                     <label for="select">Spectrogram --> Waveform Model</label>
-                    <select name="input_wg_current" class="form-control">
-                        {%for i in range(0, wg_len)%}
-                        <option value='{{waveglow_conf[i][0][9:] if "[MISSING]" in waveglow_conf[i][0] else waveglow_conf[i][0]}}' {{ 'selected' if wg_current == waveglow_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in waveglow_conf[i][0] else ''}}>{{waveglow_conf[i][0]}}</option>
+                    <select name="input_MTW_current" class="form-control">
+                        {%for i in range(0, MTW_len)%}
+                        <option value='{{waveglow_conf[i][0][9:] if "[MISSING]" in waveglow_conf[i][0] else waveglow_conf[i][0]}}' {{ 'selected' if MTW_current == waveglow_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in waveglow_conf[i][0] else ''}}>{{waveglow_conf[i][0]}}</option>
                         {%endfor%}
                     </select></div>
                 <div class="form-group">
                     <label for="select">Text --> Spectogram Model</label>
-                    <select name="input_tt_current" class="form-control">
-                        {%for i in range(0, tt_len)%}
-                        <option value='{{tacotron_conf[i][0][9:] if "[MISSING]" in tacotron_conf[i][0] else tacotron_conf[i][0]}}' {{ 'selected' if tt_current == tacotron_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in tacotron_conf[i][0] else ''}}>{{tacotron_conf[i][0]}}</option>
+                    <select name="input_ttm_current" class="form-control">
+                        {%for i in range(0, ttm_len)%}
+                        <option value='{{tacotron_conf[i][0][9:] if "[MISSING]" in tacotron_conf[i][0] else tacotron_conf[i][0]}}' {{ 'selected' if ttm_current == tacotron_conf[i][0] else '' }} {{'disabled' if '[MISSING]' in tacotron_conf[i][0] else ''}}>{{tacotron_conf[i][0]}}</option>
                         {%endfor%}
                     </select></div>
                 <button class="collapsible" type="button">Advanced Options</button>
@@ -166,7 +164,6 @@
             <div id="warning" class="alert alert-warning" role="alert" style="display: none">
                 No Text Input
               </div>
-            
             <hr class="my-4">
             {% if voice %}
             <div class="media">
@@ -193,7 +190,8 @@
                     <li style="">Website written/adapted from <a href="https://github.com/Verssae/flask-tacotron2-tts-web-app">Verssae</a> by <b>Cookie</b></li>
                     <li style="">Initial <a href="https://github.com/Twibot-ai/audio_proj_utils">Dataset Processing</a> and technical help from <b>Twibot</b></li>
                     <li style=""><b>Clipper</b> (and <b>many</b> anons) who labeled, cleaned, sourced and curated the amazing My Little Pony Dataset used.</li>
-                    <li style=""><b>Synthbot</b> who is much better at maths than me.</li><li style=""><b>Synthbot</b> who hosts phonetically aligned and cleaned up copies of the Dataset for anyone to use.</li>
+                    <li style=""><b>Synthbot</b> who is much better at maths than me.</li>
+                    <li style=""><b>Synthbot</b> who hosts phonetically aligned and cleaned up copies of the Dataset for anyone to use.</li>
                 </ul>
             </div>
         </div>

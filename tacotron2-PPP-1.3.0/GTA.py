@@ -148,7 +148,7 @@ def GTA_Synthesis(output_directory, checkpoint_path, n_gpus,
         batch_parser = model.parse_batch
     else:
         batch_parser = model.parse_batch
-        # ================ MAIN TRAINNIG LOOP! ===================
+    # ================ MAIN TRAINNIG LOOP! ===================
     os.makedirs(os.path.join(output_directory), exist_ok=True)
     f = open(os.path.join(output_directory, f'map_{filelisttype}_{rank}.txt'),'a', encoding='utf-8')
     os.makedirs(os.path.join(output_directory,'mels'), exist_ok=True)
@@ -217,6 +217,9 @@ def GTA_Synthesis(output_directory, checkpoint_path, n_gpus,
 
 
 if __name__ == '__main__':
+    """Example:
+    CUDA_VISIBLE_DEVICES=3 python3 GTA.py -o "GTA_flist" -c "outdir_truncated1/checkpoint_194000" --extremeGTA 100 --fp16_save
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('-o', '--output_directory', type=str,
                         help='directory to save checkpoints')
@@ -229,7 +232,7 @@ if __name__ == '__main__':
     parser.add_argument('--extremeGTA', type=int, default=0, required=False,
                         help='Generate a Ground Truth Aligned output every interval specified. This will run tacotron hop_length//interval times per file and use thousands of GBs of storage. Caution is advised')
     parser.add_argument('--use_training_mode', action='store_true',
-                        help='Use model.train() while generating alignments. Will increase variablility and increase inaccuracy.')
+                        help='Use model.train() while generating alignments. Will increase both variablility and inaccuracy.')
     parser.add_argument('--verify_outputs', action='store_true',
                         help='Check output length matches length of original wav input.')
     parser.add_argument('--use_validation_files', action='store_true',
@@ -244,7 +247,9 @@ if __name__ == '__main__':
     hparams = create_hparams(args.hparams)
     hparams.n_gpus = args.n_gpus
     hparams.rank = args.rank
+    hparams.use_TBPTT = False # remove limit
     hparams.truncated_length = 2**15 # remove limit
+    hparams.check_files=False # disable checks
     
     torch.backends.cudnn.enabled = hparams.cudnn_enabled
     torch.backends.cudnn.benchmark = hparams.cudnn_benchmark

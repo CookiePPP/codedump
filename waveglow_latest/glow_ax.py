@@ -114,11 +114,11 @@ class WN(nn.Module):
     size reset.  The dilation only doubles on each layer
     """
     def __init__(self, n_in_channels, cond_in_channels, cond_layers, cond_hidden_channels, cond_kernel_size, cond_padding_mode, seperable_conv, merge_res_skip, upsample_mode, n_layers, n_channels, # audio_channels, mel_channels*n_group, n_layers, n_conv_channels
-                 kernel_size_w, kernel_size_h, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None, n_layers_dilations_w=None, n_layers_dilations_h=1): # bool: ReZero
+                 kernel_size_w, kernel_size_h, speaker_embed_dim, rezero, cond_activation_func='none', negative_slope=None, n_layers_dilations_w=None, n_layers_dilations_h=1, res_skip=True):
         super(WN, self).__init__()
         assert(kernel_size_w % 2 == 1)
-        assert(kernel_size_h % 2 == 1)
         assert(n_channels % 2 == 0)
+        assert res_skip or merge_res_skip, "Cannot remove res_skip without using merge_res_skip"
         self.n_layers = n_layers
         self.n_channels = n_channels
         self.kernel_size_h = kernel_size_h
@@ -214,56 +214,64 @@ class WN(nn.Module):
                 res_skip_channels = 2*n_channels
             else:
                 res_skip_channels = n_channels
-            res_skip_layer = nn.Conv2d(n_channels, res_skip_channels, (1,1))
-            res_skip_layer = nn.utils.weight_norm(res_skip_layer, name='weight')
             
-            if rezero:
-                alpha_ = nn.Parameter(torch.rand(1)*0.02+0.09) # rezero initial state (0.1±0.01)
-                self.alpha_i.append(alpha_)
-            self.res_skip_layers.append(res_skip_layer)
+            if res_skip:
+                res_skip_layer = nn.Conv2d(n_channels, res_skip_channels, (1,1))
+                res_skip_layer = nn.utils.weight_norm(res_skip_layer, name='weight')
+                if rezero:
+                    alpha_ = nn.Parameter(torch.rand(1)*0.02+0.09) # rezero initial state (0.1±0.01)
+                    self.alpha_i.append(alpha_)
+                self.res_skip_layers.append(res_skip_layer)
+            #
     
     def _upsample_mels(self, cond, audio_size):
         cond = F.interpolate(cond, size=audio_size[3], mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None)
         #cond = F.interpolate(cond, scale_factor=600/24, mode=self.upsample_mode, align_corners=True if self.upsample_mode == 'linear' else None) # upsample by hop_length//n_group
         return cond
     
-    def forward(self, audio, spect, speaker_id=None, queues=None):
+    def forward(self, audio, spect, speaker_id=None, audio_queues=None, spect_queues=None):
         audio = audio.unsqueeze(1) #   [B, n_group//2, T//n_group] -> [B, 1, n_group//2, T//n_group]
         audio = self.start(audio) # [B, 1, n_group//2, T//n_group] -> [B, n_channels, n_group//2, T//n_group]
         if not self.merge_res_skip:
             output = torch.zeros_like(audio) # output and audio are seperate Tensors
         n_channels_tensor = torch.IntTensor([self.n_channels])
         
-        if self.speaker_embed_dim and speaker_id != None: # add speaker embeddings to spectrogram (channel dim)
-            speaker_embeddings = self.speaker_embed(speaker_id)
-            speaker_embeddings = speaker_embeddings.unsqueeze(-1).repeat(1, 1, spect.shape[2]) # shape like spect
-            spect = torch.cat([spect, speaker_embeddings], dim=1) # and concat them
-        
-        for layer in self.cond_layers: # [B, cond_channels, T//hop_length] -> [B, n_channels*n_layers, T//hop_length]
-            spect = layer(spect)
-            if hasattr(self, 'cond_activation_func'):
-                spect = self.cond_activation_func(spect)
-        
-        if audio.size(3) > spect.size(2): # if spectrogram hasn't been upsampled yet
-            spect = self._upsample_mels(spect, audio.shape)# [B, n_channels*n_layers, T//hop_length] -> [B, n_channels*n_layers, T//n_group]
-            spect = spect.unsqueeze(2)# [B, n_channels*n_layers, T//n_group] -> [B, n_channels*n_layers, 1, T//n_group]
-            assert audio.size(3) == spect.size(3), f"audio size of {audio.size(3)} != spect size of {spect.size(3)}"
+        if (spect_queues is None) or ( any([x is None for x in spect_queues]) ): # process spectrograms
+            if self.speaker_embed_dim and speaker_id != None: # add speaker embeddings to spectrogram (channel dim)
+                speaker_embeddings = self.speaker_embed(speaker_id)
+                speaker_embeddings = speaker_embeddings.unsqueeze(-1).repeat(1, 1, spect.shape[2]) # shape like spect
+                spect = torch.cat([spect, speaker_embeddings], dim=1) # and concat them
+            
+            for layer in self.cond_layers: # [B, cond_channels, T//hop_length] -> [B, n_channels*n_layers, T//hop_length]
+                spect = layer(spect)
+                if hasattr(self, 'cond_activation_func'):
+                    spect = self.cond_activation_func(spect)
+            
+            if audio.size(3) > spect.size(2): # if spectrogram hasn't been upsampled yet
+                spect = self._upsample_mels(spect, audio.shape)# [B, n_channels*n_layers, T//hop_length] -> [B, n_channels*n_layers, T//n_group]
+                spect = spect.unsqueeze(2)# [B, n_channels*n_layers, T//n_group] -> [B, n_channels*n_layers, 1, T//n_group]
+                assert audio.size(3) == spect.size(3), f"audio size of {audio.size(3)} != spect size of {spect.size(3)}"
         
         for i in range(self.n_layers):
             spect_offset = i*2*self.n_channels, (i+1)*2*self.n_channels
             spec = spect[:,spect_offset[0]:spect_offset[1]] # [B, 2*n_channels*n_layers, 1, T//n_group] -> [B, 2*n_channels, 1, T//n_group]
             
-            if queues is None:# if training/validation
-                audio_cpad = F.pad(audio, (0,0,self.padding_h[i],0)) # causal height padding (left, right, top, bottom)
-            else: # if conv-queue and inference/autoregressive sampling
-                if queues[i] is None: # if first sample in autoregressive sequence, pad start with zeros
+            if spect_queues is not None: # is spect_queues exists...
+                if spect_queues[i] is None: # but this index is empty...
+                    spect_queues[i] = spec # save spec into this index.
+                else:                       # else...
+                    spec = spect_queues[i] # load spec from this index.
+            
+            if audio_queues is None:# if training/validation...
+                audio_cpad = F.pad(audio, (0,0,self.padding_h[i],0)) # apply causal height padding (left, right, top, bottom)
+            else: # else, if conv-queue and inference/autoregressive sampling.
+                if audio_queues[i] is None: # if first sample in autoregressive sequence, pad start with zeros
                     B, n_channels, n_group, T_group = audio.shape
-                    queues[i] = audio.new_zeros( size=[B, n_channels, self.padding_h[i], T_group] )
+                    audio_queues[i] = audio.new_zeros( size=[B, n_channels, self.padding_h[i], T_group] )
                 
                 # [B, n_channels, n_group, T//n_group]
-                #queues[i] = audio_cpad = torch.cat((queue[:,:,-self.padding_h[i]:], F.pad(audio,(0,0,self.h_dilate[i]-1,0))), dim=2) # pop old queue and append audio to end of n_group dim
-                queues[i] = audio_cpad = torch.cat((queues[i][:,:,-self.padding_h[i]:], audio), dim=2) # pop old samples and append new sample to end of n_group dim
-                assert audio_cpad.shape[2] == (self.padding_h[i]+self.h_dilate[i]), f"conv queue is wrong shape. Found {audio_cpad.shape[2]}, expected {(self.padding_h[i]+self.h_dilate[i])}"
+                audio_queues[i] = audio_cpad = torch.cat((audio_queues[i], audio), dim=2)[:,:,-(self.padding_h[i]+1):] # pop old samples and append new sample to end of n_group dim
+                assert audio_cpad.shape[2] == (self.padding_h[i]+self.h_dilate[i]), f"conv queue is wrong length. Found {audio_cpad.shape[2]}, expected {(self.padding_h[i]+self.h_dilate[i])}"
             
             acts = self.in_layers[i](audio_cpad) # [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, pad+n_group//2, T//n_group]
             acts = fused_add_tanh_sigmoid_multiply(
@@ -272,10 +280,13 @@ class WN(nn.Module):
                 n_channels_tensor)
             # acts.shape <- [B, n_channels, n_group//2, T//n_group]
             
-            if hasattr(self, 'alpha_i'): # if rezero
-                res_skip_acts = self.res_skip_layers[i](acts) * self.alpha_i[i]
+            if hasattr(self, 'res_skip_layers') and len(self.res_skip_layers):
+                if hasattr(self, 'alpha_i'): # if rezero
+                    res_skip_acts = self.res_skip_layers[i](acts) * self.alpha_i[i]
+                else:
+                    res_skip_acts = self.res_skip_layers[i](acts)
             else:
-                res_skip_acts = self.res_skip_layers[i](acts)
+                res_skip_acts = acts
                 # if merge_res_skip: [B, n_channels, n_group//2, T//n_group] -> [B, n_channels, n_group//2, T//n_group]
                 # else: [B, n_channels, n_group//2, T//n_group] -> [B, 2*n_channels, n_group//2, T//n_group]
             
@@ -291,11 +302,14 @@ class WN(nn.Module):
         if self.merge_res_skip:
             output = audio
         
-        if queues is not None:
-            return self.end(output).transpose(1,0), queues
+        func_out = self.end(output).transpose(1,0) # [B, n_channels, n_group//2, T//n_group] -> [B, 2, n_group//2, T//n_group] -> [2, B, n_group//2, T//n_group]
         
-        return self.end(output).transpose(1,0)
-        # [B, n_channels, n_group//2, T//n_group] -> [B, 2, n_group//2, T//n_group] -> [2, B, n_group//2, T//n_group]
+        if audio_queues is not None:
+            func_out = [func_out,]
+            func_out.append(audio_queues)
+        if spect_queues is not None:
+            func_out.append(spect_queues)
+        return func_out
 
 
 class WaveGlow(nn.Module):

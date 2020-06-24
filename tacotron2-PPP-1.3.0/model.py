@@ -150,10 +150,10 @@ class DynamicConvolutionAttention(nn.Module):
         # dynamic
         self.dynamic_filter = torch.nn.Sequential(
             LinearNorm(attention_rnn_dim, attention_dim, bias=True, w_init_gain='tanh'), # attention_rnn_dim -> attention dim
-            nn.Tanh(),#nn.ReLU(),#nn.LeakyReLU(negative_slope=0.1),
+            nn.Tanh(),#nn.LeakyReLU(negative_slope=0.1),#nn.ReLU(),#nn.Tanh(),
             LinearNorm(attention_dim, dynamic_filter_num*dynamic_filter_len, bias=False, w_init_gain='tanh'), # filter_num * filter_length
             )
-        self.vg = LinearNorm(dynamic_filter_num, 1, bias=True)
+        self.vg = LinearNorm(dynamic_filter_num, attention_dim, bias=True)
         
         # prior
         self.prior_filter = self.get_prior_filter(dynamic_filter_num, dynamic_filter_len).to("cuda")
@@ -192,27 +192,30 @@ class DynamicConvolutionAttention(nn.Module):
         if verbose: print("1 prev_att.shape =", prev_att.shape) # [16, 90, 1]
         if verbose: print("1 dynamic_filt.shape =", dynamic_filt.shape) # [16, 21, 8]
         
-        if False: # calc dynamic energies from matmul with dynamic filter
+        if True: # calc dynamic energies from matmul with dynamic filter
             # "stack previous alignments into matrices" # https://www.reddit.com/r/MachineLearning/comments/dmo0z1/r_attenchilada_locationrelative_attention/f6vtkmk/
             prev_att_stacked = prev_att.repeat(1,1,self.dynamic_filter_len)
-            
             dynamic = prev_att_stacked @ dynamic_filt # [B, enc_T, dynamic_filter_len] @ [B, dynamic_filter_len, dynamic_filter_num] -> [B, enc_T, dynamic_filter_num]
+            if True: # extra linear?
+                dynamic = self.vg(dynamic) # [B, enc_T, dynamic_filter_num] -> [B, enc_T, attention_dim]
+                pass
         else:  # calc dynamic engeries from F.conv1d with dynamic filter
             dynamic_filt = dynamic_filt.permute(2,0,1)[:,:,None,:] # [B, dynamic_filter_len, dynamic_filter_num] -> [dynamic_filter_num,B                 ,1, dynamic_filter_len]
-                                                                                                                   #(out_channels,     ,in_channels/groups,kH,kW                )
-            
+                                                                                                                   #(out_channels      ,in_channels/groups,kH,kW                )
             if verbose: print("1.9 dynamic_filt.shape =", dynamic_filt.shape) # [8, 24, 1, 21]
             shape = dynamic_filt.shape
             dynamic_filt = dynamic_filt.reshape(shape[0]*shape[1], 1, 1, shape[-1]) # [dynamic_filter_num,B,1, dynamic_filter_len] -> [dynamic_filter_num*B,1,1, dynamic_filter_len]
-            
             prev_att_shaped = prev_att[None, ...].permute(0, 1, 3, 2) # [B, enc_T, 1] -> [1, B, enc_T, 1] -> [1        ,B          ,1 ,enc_T]
-                                                                                                     #(minibatch,in_channels,iH,iW   )
-            
+                                                                                                            #(minibatch,in_channels,iH,iW   )
             if verbose: print("2 prev_att_shaped.shape =", prev_att_shaped.shape) # [1, 24, 1, 65] -> [24, 8, 1, 65]
             if verbose: print("2 dynamic_filt.shape =", dynamic_filt.shape) # [8, 24, 1, 21]
-            #prev_att_padd = F.pad(prev_att_shaped, (padd, 0)) # [1, 1, B, enc_T] -> [1, 1, B, padd+enc_T]
-            padd = (self.dynamic_filter_len-1)//2
-            dynamic = torch.nn.functional.conv2d(prev_att_shaped, dynamic_filt, bias=None, stride=1, padding=(0,padd), dilation=1, groups=prev_att_shaped.size(1))# [1, B, 1, enc_T] -> [1, B*dyna_f_num, 1, enc_T]
+            if False:
+                padd = (self.dynamic_filter_len-1)//2
+                dynamic = torch.nn.functional.conv2d(prev_att_shaped, dynamic_filt, bias=None, stride=1, padding=(0,padd), dilation=1, groups=prev_att_shaped.size(1))# [1, B, 1, enc_T] -> [1, B*dyna_f_num, 1, enc_T]
+            else:
+                padd = self.dynamic_filter_len - 1
+                prev_att_shaped = F.pad(prev_att_shaped, (padd, 0)) # [1, 1, B, enc_T] -> [1, 1, B, padd+enc_T]
+                dynamic = torch.nn.functional.conv2d(prev_att_shaped, dynamic_filt, bias=None, stride=1, padding=0, dilation=1, groups=prev_att_shaped.size(1))# [1, B, 1, enc_T] -> [1, B*dyna_f_num, 1, enc_T]
             if verbose: print("2 dynamic.shape =", dynamic.shape) # [1, 8, 1, 65]
             dynamic = dynamic.view(shape[1], shape[0], -1).transpose(1,2) # [1, B*dyna_f_num, 1, enc_T] -> [B, dyna_f_num, enc_T] -> [B, enc_T, dyna_f_num]
         
@@ -233,18 +236,18 @@ class DynamicConvolutionAttention(nn.Module):
         else:
             pass
         
-        # add the Prior filter
-        padd = self.dynamic_filter_len - 11
-        prev_att = F.pad(prev_att.transpose(1,2), (padd, 0)) # [B, enc_T, 1] -> [B, 1, enc_T] -> [B, 1, enc_T+padd]
-        prior_energy = F.conv1d(prev_att, self.prior_filter.to(prev_att.dtype)) # [B, 1, enc_T+padd] -> [B, 1, enc_T]
-        prior_energy = (prior_energy.clamp(min=1e-6)).log() # [B, enc_T, 1] clamp min value so log doesn't underflow
-        #prior_energy = prior_energy.clamp(min=1e-6)
-        #prior_energy = prior_energy.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T]
-        
-        if verbose: print("3 energies.shape =", energies.shape) #
-        if verbose: print("3 prior_energy.shape =", prior_energy.shape) #
-        
-        energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
+        if False: # add the Prior filter
+            padd = self.dynamic_filter_len - 11
+            prev_att = F.pad(prev_att.transpose(1,2), (padd, 0)) # [B, enc_T, 1] -> [B, 1, enc_T] -> [B, 1, enc_T+padd]
+            prior_energy = F.conv1d(prev_att, self.prior_filter.to(prev_att.dtype)) # [B, 1, enc_T+padd] -> [B, 1, enc_T]
+            prior_energy = (prior_energy.clamp(min=1e-6)).log() # [B, enc_T, 1] clamp min value so log doesn't underflow
+            #prior_energy = prior_energy.clamp(min=1e-6)
+            #prior_energy = prior_energy.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T]
+            
+            if verbose: print("3 energies.shape =", energies.shape) #
+            if verbose: print("3 prior_energy.shape =", prior_energy.shape) #
+            
+            energies += prior_energy.transpose(1,2) # [B, enc_T, 1]
         
         return energies.squeeze(-1) # [B, enc_T, 1] -> [B, enc_T] # squeeze blank dim
 
