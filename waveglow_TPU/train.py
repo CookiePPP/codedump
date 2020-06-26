@@ -482,7 +482,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                         model.zero_grad()
                         raise LossExplosion(f"\nLOSS EXPLOSION EXCEPTION ON RANK {rank}: Loss reached {reduced_loss} during iteration {iteration}.\n\n\n")
                     
-                    grad_clip = True; grad_clip_thresh = 500
+                    grad_clip = False; grad_clip_thresh = 500
                     if grad_clip:
                         if fp16_run:
                             grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -538,7 +538,7 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
                         if (os.path.exists(save_file_check_path)):
                             os.remove(save_file_check_path)
                     
-                    if (iteration % validation_interval == 0):
+                    if False: #(iteration % validation_interval == 0): # XLA requires an actually well written validation cycle.
                         if rank == 0:
                             MSE, MAE = validate(model, loader_STFT, STFT, logger, iteration, data_config['validation_files'], speaker_lookup, sigma, output_directory, data_config)
                             if scheduler:
@@ -611,7 +611,7 @@ if __name__ == "__main__":
     }
     print(waveglow_config)
     
-    num_gpus = torch.cuda.device_count()
+    num_gpus = torch.cuda.device_count() or 1
     if num_gpus > 1:
         if args.group_name == '':
             print("WARNING: Multiple GPUs detected but no distributed group set")
