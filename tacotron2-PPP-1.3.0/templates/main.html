@@ -78,22 +78,34 @@
 
 <body>
 <script>
-if (
-  window.matchMedia &&
-  window.matchMedia(
-    "(prefers-color-scheme: dark)"
-  ).matches
-) {
-  toggleDarkMode()
-}
-
-function toggleDarkMode() {
-  if (document.documentElement.classList.contains("dark-mode")) {
-    document.documentElement.classList.remove("dark-mode");
-  } else {
-    document.documentElement.classList.add("dark-mode");
-  }
-}
+    saved_dark_mode = localStorage.getItem('dark_mode');
+    os_dark_mode = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)
+    if (saved_dark_mode == null){
+        if (os_dark_mode){
+          toggleDarkMode();
+        }
+    } else {
+        if (saved_dark_mode == "True"){
+            setDarkMode();
+        } else {
+            remDarkMode();
+        }
+    }
+    function setDarkMode() {
+        document.documentElement.classList.add("dark-mode");
+        localStorage.setItem('dark_mode', 'True');
+    }
+    function remDarkMode() {
+        document.documentElement.classList.remove("dark-mode");
+        localStorage.setItem('dark_mode', 'False');
+    }
+    function toggleDarkMode() {
+      if (document.documentElement.classList.contains("dark-mode")) {
+        remDarkMode();
+      } else {
+        setDarkMode();
+      }
+    }
 </script>
 
     <div class="w-50 p-3 ml-3" style="margin: auto auto!important;">
