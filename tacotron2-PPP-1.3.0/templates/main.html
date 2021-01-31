@@ -46,42 +46,59 @@
       background-color: #f1f1f1;
     }
     
-    @media (prefers-color-scheme: dark) {
-      body{
-        background-color: #282828;
-        color: #FFF;
-      }
-      #content {
-        background-color: #444;
-        color: #FFF;
-      }
+    .dark-mode body{
+      background-color: #282828;
+      color: #FFF;
+    }
+    
+    .dark-mode #content {
+      background-color: #444;
+      color: #FFF;
+    }
 
-      .form-control {
-        background-color: #555 !important;
-        color: #FFF !important;
-      }
-      
-      .collapsible {
-        background-color: #555 !important;
-        color: #FFF !important;
-      }
-      
-      .form-group {
-        background-color: #444 !important;
-      }
-      
-      label {
-        color: #FFF;
-      }
+    .dark-mode .form-control {
+      background-color: #555 !important;
+      color: #FFF !important;
+    }
+    
+    .dark-mode .collapsible {
+      background-color: #555 !important;
+      color: #FFF !important;
+    }
+    
+    .dark-mode .form-group {
+      background-color: #444 !important;
+    }
+    
+    .dark-mode label {
+      color: #FFF;
     }
     </style>
 </head>
 
 <body>
+<script>
+if (
+  window.matchMedia &&
+  window.matchMedia(
+    "(prefers-color-scheme: dark)"
+  ).matches
+) {
+  toggleDarkMode()
+}
 
+function toggleDarkMode() {
+  if (document.documentElement.classList.contains("dark-mode")) {
+    document.documentElement.classList.remove("dark-mode");
+  } else {
+    document.documentElement.classList.add("dark-mode");
+  }
+}
+</script>
 
     <div class="w-50 p-3 ml-3" style="margin: auto auto!important;">
         <a href="/">Home/Reset</a>
+        <a onclick="toggleDarkMode()" href="#" style="padding: 0 20px;">Toggle Dark Mode</a>
         <div style="float: right;">Send Feedback to <a href="mailto:cookietriplep@gmail.com" title="You can send whatever to this email, I reply to about 50% of what comes in.">cookietriplep@gmail.com</a></div>
         
         <div id="content" class="jumbotron">
