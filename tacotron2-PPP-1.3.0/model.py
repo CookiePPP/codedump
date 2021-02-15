@@ -43,8 +43,9 @@ class LSTMCellWithZoneout(nn.LSTMCell):
             c = torch.where(c_mask, old_c, new_c)
             return h, c
         else:
-            not_zoneout_prob = 1.0-self._zoneout_prob
-            return old_h*self._zoneout_prob+new_h*not_zoneout_prob, old_c*self._zoneout_prob+new_c*not_zoneout_prob
+            inf_zoneout_prob = self._zoneout_prob*0.20
+            not_zoneout_prob = 1.0-inf_zoneout_prob
+            return old_h*inf_zoneout_prob+new_h*not_zoneout_prob, old_c*inf_zoneout_prob+new_c*not_zoneout_prob
 
 
 class LocationLayer(nn.Module):
