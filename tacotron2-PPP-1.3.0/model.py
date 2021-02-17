@@ -43,9 +43,13 @@ class LSTMCellWithZoneout(nn.LSTMCell):
             c = torch.where(c_mask, old_c, new_c)
             return h, c
         else:
-            inf_zoneout_prob = self._zoneout_prob*0.20
-            not_zoneout_prob = 1.0-inf_zoneout_prob
-            return old_h*inf_zoneout_prob+new_h*not_zoneout_prob, old_c*inf_zoneout_prob+new_c*not_zoneout_prob
+            correctness = 0.00 # leaving this here in case it comes up again later. In this case 'correctness' refers to being accurate to the original zoneout paper. Normally during inference a blend of old and new hidden states is used in the LSTM. In tacotron2 it appears that using only hidden states sounds more natural. Either that or there's a mistake somewhere that I missed.
+            inf_zoneout_prob = self._zoneout_prob*correctness
+            if inf_zoneout_prob == 0.0:
+                return new_h, new_c
+            else:
+                not_zoneout_prob = 1.0-inf_zoneout_prob
+                return old_h*inf_zoneout_prob+new_h*not_zoneout_prob, old_c*inf_zoneout_prob+new_c*not_zoneout_prob
 
 
 class LocationLayer(nn.Module):
